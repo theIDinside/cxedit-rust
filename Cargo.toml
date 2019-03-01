@@ -1,0 +1,9 @@
+[package]
+name = "cxedit"
+version = "0.1.0"
+authors = ["Simon Farre <simon.farre.cx@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+libc = "*"
+termios = "*"
