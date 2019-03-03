@@ -1,7 +1,8 @@
 use std::ops::Range;
 use std::ptr::copy as copyrange;
 use super::BufferString;
-use super::Buffer;
+use std::ops::Index;
+use crate::data::textbuffer::Cursor;
 
 pub struct GapBuffer<T> {
     data: Vec<T>,
@@ -10,7 +11,10 @@ pub struct GapBuffer<T> {
 
 impl <T> GapBuffer<T> {
     pub fn new() -> GapBuffer<T> {
-        GapBuffer { data: Vec::new(), gap: 0..0 }
+        GapBuffer {
+            data: Vec::new(),
+            gap: 0..0,
+        }
     }
 
     pub fn capacity(&self) -> usize {
@@ -88,7 +92,10 @@ impl <T> GapBuffer<T> {
         }
     }
 
-    pub fn remove(&mut self) -> Option<T> {
+    /**
+    Works like the "delete" key when you edit text. It deletes what is BEFORE the cursor. (gap.end + 1)
+    */
+    pub fn delete(&mut self) -> Option<T> {
         if self.gap.end == self.capacity() {
             return None;
         }
@@ -96,6 +103,20 @@ impl <T> GapBuffer<T> {
             std::ptr::read(self.space(self.gap.end))
         };
         self.gap.end += 1;
+        Some(e)
+    }
+
+    /**
+    Works like the "delete" key when you edit text. It deletes what is BEFORE the cursor. (gap.start - 1)
+    */
+    pub fn remove(&mut self) -> Option<T> {
+        if self.gap.start == 0 {
+            return None;
+        }
+        let e = unsafe {
+            std::ptr::read(self.space(self.gap.start - 1))
+        };
+        self.gap.start -= 1;
         Some(e)
     }
 
@@ -118,6 +139,104 @@ impl <T> GapBuffer<T> {
         self.data = newbuf;
         self.gap = newgap;
     }
+
+    pub fn new_with_capacity(cap: usize) -> GapBuffer<T> {
+        let mut gb = GapBuffer::new();
+        let buf = Vec::with_capacity(cap);
+        let gap = 0..16;
+        gb.gap = gap;
+        gb.data = buf;
+        gb
+    }
+
+    pub fn iter_begin_to_cursor(&self, cursor: Cursor) -> GapBufferIterator<T> {
+        let pos = match cursor {
+            Cursor::Absolute(pos) => pos,
+            Cursor::Buffer => self.get_pos(),
+        };
+        GapBufferIterator {
+            start: 0,
+            end: pos,
+            buffer: self
+        }
+    }
+
+    pub fn iter_cursor_to_end(&self, cursor: Cursor) -> GapBufferIterator<T> {
+        let pos = match cursor {
+            Cursor::Absolute(pos) => pos,
+            Cursor::Buffer => self.get_pos(),
+        };
+        GapBufferIterator {
+            start: pos,
+            end: self.len(),
+            buffer: self
+        }
+    }
+
+    pub fn iter(&self) -> GapBufferIterator<T> {
+        GapBufferIterator {
+            start: 0,
+            end: self.len(),
+            buffer: self
+        }
+    }
+}
+
+pub struct GapBufferIterator<'a, T> {
+    start: usize,
+    end: usize,
+    buffer: &'a GapBuffer<T>
+}
+
+impl<'a, T> Iterator for GapBufferIterator<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start < self.end {
+            if let Some(c) = self.buffer.get(self.start) {
+                self.start += 1;
+                Some(c)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    fn position<P>(&mut self, mut predicate: P) -> Option<usize> where
+        Self: Sized,
+        P: FnMut(Self::Item) -> bool, {
+        while let Some(ch) = self.next() {
+         if predicate(ch) {
+             return Some(self.start);
+         }
+        }
+        None
+    }
+}
+
+
+impl<'a, T> DoubleEndedIterator for GapBufferIterator<'a, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.end >= self.start {
+            if let Some(c) = self.buffer.get(self.end) {
+                self.end -= 1;
+                Some(c)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+}
+
+impl Index<usize> for GapBuffer<char> {
+    type Output = char;
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get(index).unwrap()
+    }
 }
 
 impl<T> super::Buffer<T> for GapBuffer<T> {
@@ -126,7 +245,7 @@ impl<T> super::Buffer<T> for GapBuffer<T> {
     }
 
     fn remove(&mut self) {
-        self.remove();
+        self.delete();
     }
 }
 
@@ -151,6 +270,7 @@ impl BufferString for GapBuffer<char> {
                 match self.get(i) {
                     Some(c) => {
                         tmpbuf.insert(i, *c);
+                        // tmpbuf.insert(i, *c);
                     },
                     _ => {
 
@@ -169,19 +289,5 @@ impl BufferString for GapBuffer<char> {
             tmpbuf
         };
         return res;
-    }
-}
-
-impl BufferString for GapBuffer<Vec<GapBuffer<char>>> {
-    fn read_string(&self, range: std::ops::Range<usize>) -> String {
-        if range.end < self.len() {
-            let mut tmpbuf = String::new():
-            for i in range {
-                match self.get(i) {
-                    Some(line)
-                }
-            }
-        }
-        "".to_string()
     }
 }
