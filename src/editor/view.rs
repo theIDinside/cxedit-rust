@@ -22,12 +22,36 @@ pub struct WinDim(pub u16, pub u16);
 
 pub enum ViewOperations {
     ClearLineRest,
+    StepRight,
+    StepLeft,
+    StepUp,
+    StepDown,
+    LineStart
+}
+
+impl Display for ViewOperations {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        let res = match self {
+            ViewOperations::ClearLineRest => "\x1b[0K",
+            ViewOperations::StepRight => "\x1b[1C",
+            ViewOperations::StepLeft => "\x1b[1D",
+            ViewOperations::StepUp => "\x1b[1A",
+            ViewOperations::StepDown => "\x1b[1B",
+            ViewOperations::LineStart => "\x1b[9D",
+        };
+        write!(f, "{}", res)
+    }
 }
 
 impl ViewOperations {
     fn as_output(&self) -> &str {
         match self {
-            ViewOperations::ClearLineRest => "\x1b[0K"
+            ViewOperations::ClearLineRest => "\x1b[0K",
+            ViewOperations::StepRight => "\x1b[1C",
+            ViewOperations::StepLeft => "\x1b[1D",
+            ViewOperations::StepUp => "\x1b[1A",
+            ViewOperations::StepDown => "\x1b[1B",
+            ViewOperations::LineStart => "\x1b[9D",
         }
     }
 }
@@ -192,8 +216,9 @@ impl View {
         let status_title = "[status]: ";
         self.statline_view_cursor.col = status_title.len() + 1;
         status.replace_range(0..status_title.len(), status_title);
-        print!("{}{}{}[1;1H",
+        print!("{}{}{}{}[1;1H",
                self.view_cfg.bg_color.colorize(res.as_ref()),
+               self.view_cfg.stat_line_color.1,
                self.view_cfg.stat_line_color.0.colorize(status.as_ref()),
                esc as char);
         stdout().flush();
@@ -261,12 +286,14 @@ impl View {
     }
 
     pub fn write_statline_line(&self, title: &str, content: &str) {
-        print!("{}{}{}{}{}{}", self.status_line_position, ViewOperations::ClearLineRest.as_output(), self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, title, content);
+        let empty = self.win_size.0 as usize - (title.len() + content.len());
+        print!("{}{}{}{}{}{}{}", self.status_line_position, ViewOperations::ClearLineRest.as_output(), self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, title, content, " ".repeat(empty));
         stdout().flush();
     }
 
-    pub fn update_statline_with(&mut self, data: &str) {
-        print!("{}{}{}{}\r", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, data);
+    pub fn update_statline_with(&mut self, data: &str, cursor_pos: &ViewCursor) {
+        self.statline_view_cursor = *cursor_pos;
+        print!("{}{}{}{}{}\r{}", self.status_line_position, ViewOperations::ClearLineRest, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, data, cursor_pos);
         stdout().flush();
     }
 

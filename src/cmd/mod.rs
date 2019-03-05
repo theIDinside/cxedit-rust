@@ -17,6 +17,33 @@ pub enum Command {
     Jump,
     Find,
     Save,
+    Open
+}
+
+use self::Command::{Move, Jump, Find, Save, Open};
+
+impl From<&Command> for &str {
+    fn from(cmd: &Command) -> Self {
+        match cmd {
+            Jump => "[goto]: ",
+            Find => "[find]: ",
+            Save => "[save]: ",
+            Open => "[open]: ",
+            _ => ""
+        }
+    }
+}
+
+impl From<&Command> for String {
+    fn from(cmd: &Command) -> Self {
+        match cmd {
+            Jump => "[goto]: ".into(),
+            Find => "[find]: ".into(),
+            Save => "[save]: ".into(),
+            Open => "[open]: ".into(),
+            _ => "".into()
+        }
+    }
 }
 
 pub enum Operation {

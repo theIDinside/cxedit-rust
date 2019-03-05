@@ -7,7 +7,7 @@ use std::str::from_utf8;
 use std::fs::{read_to_string};
 use libc::read as read;
 use std::io::{Write, stdout};
-use crate::cmd::{MoveKind, MoveDir};
+use crate::cmd::{MoveKind, MoveDir, Command};
 use crate::editor::{view::ViewCursor, view::View};
 
 pub enum KeyCode {
@@ -82,6 +82,8 @@ pub enum StatlineCommand {
 
 use self::StatlineCommand::{SaveFile, OpenFile};
 use crate::data::SaveFileError;
+use crate::editor::view::ViewOperations;
+
 impl Editor {
     pub fn new() -> Editor {
         Editor {
@@ -106,40 +108,110 @@ impl Editor {
     }
 
     pub fn open(&mut self, f: &Path) {
-        let rc_buf = Arc::new(Mutex::new(Textbuffer::from_file(f.to_str().unwrap().to_string())));
         if self.views.len() == 0 {
-            let mut v = View::new().unwrap_or_else(|| View::new().unwrap());
-            v.set_viewed_buf(rc_buf);
-            self.views.push(v);
+
         } else {
-            self.views[self.current_view].set_viewed_buf(rc_buf);
+            match read_to_string(f) {
+                Ok(data) => {
+                    let lines_to_print = self.get_view().win_size.1 - 1;
+                    let mut lindex = 0;
+                    self.buffers[self.current_buffer].lock().unwrap().clear_buffer_contents();
+                    self.buffers[self.current_buffer].lock().unwrap().insert_data(&data);
+                    let d_to_print = data.chars().take_while(|ch| {
+                        if *ch == '\n' {
+                            lindex += 1;
+                        }
+                        lindex < lines_to_print
+                    }).collect::<String>();
+                    self.views[self.current_view].init();
+                    d_to_print.chars().for_each(|c| {
+                        self.views[self.current_view].write_character(c);
+                    });
+                    self.buffers[self.current_buffer].lock().unwrap().set_textpos(0);
+                    self.views[self.current_view].view_cursor = ViewCursor::default();
+                    self.views[0].write_statline_line("[open]: ", &format!("successfully opened {}", f.display()))
+                },
+                Err(_e) => {
+
+                }
+            }
         }
     }
 
-    pub fn statline_input(&mut self, statcmd: StatlineCommand) -> Option<StatlineCommand> {
+    pub fn statline_input(&mut self, cmd: Command) -> Option<StatlineCommand> {
         let mut input = String::new();
+        let stat_line_title = String::from(&cmd);
+        let title_len = stat_line_title.len();
+        let mut vc = self.views[0].status_line_position;
+        vc.col = title_len + 1usize;
+        let mut buf_index = 0;
         loop {
             match self.handle_keypress() {
                 KeyCode::Character(ch) => {
-                    input.push(ch);
-                    self.views[self.current_view].write_statline_character(ch);
+                    vc.col += 1;
+                    if buf_index == input.len() {
+                        input.push(ch);
+                        self.views[self.current_view].write_statline_character(ch);
+                    } else {
+                        self.views[self.current_view].statline_view_cursor = vc;
+                        input.insert(buf_index, ch);
+                        let old_content = stat_line_title.clone().chars().chain(input.chars()).collect::<String>();
+                        self.views[self.current_view].update_statline_with(&old_content, &vc);
+                    }
+                    buf_index += 1;
                 },
                 KeyCode::Backspace => {
-                    input.pop();
-                    let mut old_content = String::from("[open]: ");
-                    old_content.push_str(&input);
-                    self.views[self.current_view].update_statline_with(&old_content);
+                    if buf_index == input.len() && buf_index > 0 {
+                        input.pop();
+                        buf_index -= 1;
+                        vc.col -= 1;
+                    } else if buf_index > 0 {
+                        input.remove(buf_index-1);
+                        buf_index -= 1;
+                        vc.col -= 1;
+                    }
+                    let old_content = stat_line_title.clone().chars().chain(input.chars()).collect::<String>();
+                    self.views[self.current_view].update_statline_with(&old_content, &vc);
                 }
                 KeyCode::Enter => {
-                    return match statcmd {
-                        StatlineCommand::OpenFile(_) => {
+                    return match cmd {
+                        Command::Open => {
                             Some(StatlineCommand::OpenFile(Some(input.clone())))
                         },
-                        StatlineCommand::SaveFile(_) => {
+                        Command::Save => {
                             Some(StatlineCommand::SaveFile(Some(input.clone())))
-                        }
+                        },
+                        Command::Find => unimplemented!(),
+                        Command::Jump => unimplemented!(),
+                        Command::Move(mk) => unimplemented!()
                     };
                 },
+                KeyCode::Escaped(esc_kc) => {
+                    match esc_kc {
+                        EscapeKeyCode::Down => {    // TODO: perform command history scroll down
+
+                        },
+                        EscapeKeyCode::Up => {      // TODO: perform command history scroll up
+
+                        },
+                        EscapeKeyCode::Right => {   // TODO: perform step right on status line
+                            if buf_index < input.len() {
+                                print!("{}", ViewOperations::StepRight);
+                                buf_index += 1;
+                                vc.col += 1;
+                                stdout().flush();
+                            }
+                        },
+                        EscapeKeyCode::Left => {    // TODO: perform step left on status line
+                            if buf_index > 0 {
+                                print!("{}", ViewOperations::StepLeft);
+                                buf_index -= 1;
+                                vc.col -= 1;
+                                stdout().flush();
+                            }
+                        },
+                    }
+                }
                 KeyCode::Esc => {
                     return None;
                 },
@@ -154,6 +226,7 @@ impl Editor {
         &mut self.views[self.current_view]
     }
 
+    // TODO: split up run function, to remove the intense complexity and spaghettization of code
     pub fn run(&mut self) {
         // TODO: setup code, and also
         // println!("Entering editor main loop:\r");
@@ -196,8 +269,9 @@ impl Editor {
                             reset statusline.
                     */
                     // TODO: implement 2 functions, one that will write without asking for new file name/ask if ok, and one that does
+                    // TODO: implement Config for editor. Then request mapping of key to command via self.get_keybinding(KeyCode::CtrlS)
                     self.views[0].on_save_file();
-                    let cmd = self.statline_input(SaveFile(None));
+                    let cmd = self.statline_input(Command::Save);
                     if let Some(SaveFile(Some(suggested_fname))) = cmd {
                         let p = Path::new(&suggested_fname);
                         match self.buffers[0].lock().unwrap().save_to_file(p, None) {
@@ -208,11 +282,13 @@ impl Editor {
                                 self.views[0].write_statline_line("[error]: ", &format!("{}", e))
                             }
                         }
+                    } else {
+                        self.views[0].restore_statline();
                     }
                 },
                 KeyCode::CtrlO => {
                     self.views[self.current_view].on_open_file();
-                    let cmd = self.statline_input(OpenFile(None));
+                    let cmd = self.statline_input(Command::Open);
                     if let Some(StatlineCommand::OpenFile(Some(fname))) = cmd {
                         match read_to_string(Path::new(&fname)) {
                             Ok(data) => {
@@ -232,13 +308,15 @@ impl Editor {
                                 });
                                 self.buffers[self.current_buffer].lock().unwrap().set_textpos(0);
                                 self.views[self.current_view].view_cursor = ViewCursor::default();
+                                self.views[0].write_statline_line("[open]: ", &format!("successfully opened {}", fname))
                             },
                             Err(_e) => {
 
                             }
                         }
+                    } else if let None = cmd {
+                        self.views[0].restore_statline();
                     }
-                    self.views[self.current_view].restore_statline();
                 },
                 KeyCode::CtrlA => {
                     // N.B! This is a debug function ONLY. Used in the beginning for testing display functions, cursor navigation etc
@@ -308,7 +386,7 @@ impl Editor {
         use libc::STDIN_FILENO;
         let res = unsafe {
             let mut ch_seq: [u8; 3] = [0,0,0];
-            let kc = if read(STDIN_FILENO, ch_seq.as_mut_ptr() as *mut libc::c_void, 1) == -1 {
+            let kc = if read(STDIN_FILENO, ch_seq.as_mut_ptr() as *mut libc::c_void, 1) == 0 {
             // here, we are saying "we have not read anything more than 27 (Escape keycode) and/or there was an error reading the next
             // part of the sequence, therefore -> return as if only "escape" was pressed on the keyboard.
                 KeyCode::Esc
