@@ -7,10 +7,21 @@ use termios::Termios;
 use termios::tcsetattr;
 use std::str::from_utf8;
 
+use std::fs::{File, read_to_string};
+
 use libc::read as read;
+use crate::editor::view::WinDim;
+use std::io::stdout;
+use std::io::{Write, Read};
+use crate::cmd::MoveKind;
+use crate::cmd::MoveDir;
+use crate::editor::view::ViewCursor;
 
 pub enum KeyCode {
     CtrlBackspace,
+    CtrlA,
+    CtrlB,
+    CtrlO,
     CtrlQ,
     Enter,
     Tab,
@@ -26,6 +37,11 @@ pub enum EscapeKeyCode {
     Right,
     Up,
     Down
+}
+
+pub enum InputMode {
+    StatLine,
+    Document
 }
 
 
@@ -52,7 +68,8 @@ pub struct Editor {
     current_view: usize,
     current_buffer: usize,
     running: bool,
-    original_terminal_settings: Option<Termios>
+    original_terminal_settings: Option<Termios>,
+    input_mode: InputMode,
 }
 
 impl Drop for Editor {
@@ -70,6 +87,20 @@ impl Drop for Editor {
     }
 }
 
+impl EscapeKeyCode {
+    pub fn output(&self) -> &str {
+        match self {
+            EscapeKeyCode::Down => "\x1b[1B",
+            EscapeKeyCode::Up => "\x1b[1A",
+            EscapeKeyCode::Left => "\x1b[1D",
+            EscapeKeyCode::Right => "\x1b[1C"
+        }
+    }
+}
+
+pub enum StatlineCommand {
+    OpenFile(String)
+}
 
 impl Editor {
     pub fn new() -> Editor {
@@ -79,47 +110,172 @@ impl Editor {
             current_buffer: 0,
             current_view: 0,
             running: false,
-            original_terminal_settings: None
+            original_terminal_settings: None,
+            input_mode: InputMode::Document
         }
     }
 
     pub fn init(&mut self, settings: Option<Termios>) {
         self.original_terminal_settings = settings;
         self.buffers.push(Arc::new(Mutex::new(Textbuffer::new())));
-        let mut v = View::new();
+        let mut v = View::new().unwrap_or_else(|| View::new().unwrap());
+        let dim = v.get_window_size().and_then(|ws| Some(WinDim::from(ws))).unwrap_or(WinDim(0, 0));
+        let esc = 27u8;
         v.set_viewed_buf(self.buffers[0].clone());
+        v.init();
+        self.views.push(v);
         self.running = true;
     }
 
     pub fn open(&mut self, f: &Path) {
         let mut rcBuf = Arc::new(Mutex::new(Textbuffer::from_file(f.to_str().unwrap().to_string())));
         if self.views.len() == 0 {
-            let mut v = View::new();
+            let mut v = View::new().unwrap_or_else(|| View::new().unwrap());
             v.set_viewed_buf(rcBuf);
             self.views.push(v);
+        } else {
+            self.views[self.current_view].set_viewed_buf(rcBuf);
         }
+    }
+
+    pub fn statline_input(&mut self) -> Option<StatlineCommand> {
+        let mut input = String::new();
+        loop {
+            match self.handle_keypress() {
+                KeyCode::Character(ch) => {
+                    input.push(ch);
+                    self.views[self.current_view].write_statline_character(ch);
+                },
+                KeyCode::Backspace => {
+                    input.pop();
+                    let mut old_content = String::from("[open]: ");
+                    old_content.push_str(&input);
+                    self.views[self.current_view].update_statline_with(&old_content);
+                }
+                KeyCode::Enter => {
+                    return Some(StatlineCommand::OpenFile(input.clone()));
+                },
+                KeyCode::Esc => {
+                    return None;
+                },
+                _ => {
+                    // any other input than enter, a character key or escape, is invalid at this point and will do nothing.
+                }
+            }
+        }
+        None
+    }
+
+    pub fn get_view(&mut self) -> &mut View {
+        &mut self.views[self.current_view]
     }
 
     pub fn run(&mut self) {
         // TODO: setup code, and also
-        let esc = 27u8;
-        print!("{}[2J{}[1;1H", esc as char, esc as char);
-        println!("Entering editor main loop:\r");
+        // println!("Entering editor main loop:\r");
         while self.running {
             match self.handle_keypress() {
-                KeyCode::Character(c) => { self.buffers[0].lock().unwrap().insert_ch(c) },
+                KeyCode::Character(c) => {
+                    self.buffers[0].lock().unwrap().insert_ch(c);
+                    self.views[self.current_view].write_character(c);
+                },
                 KeyCode::Backspace => self.buffers[0].lock().unwrap().remove(),
                 KeyCode::Tab => self.buffers[0].lock().unwrap().insert_data("    ".into()),
-                KeyCode::Enter => self.buffers[0].lock().unwrap().insert_ch('\n'),
+                KeyCode::Enter => {
+                    self.buffers[0].lock().unwrap().insert_ch('\n');
+                    self.views[self.current_view].write_character('\n');
+                },
                 KeyCode::Esc => {},
                 KeyCode::CtrlBackspace => {},
+                KeyCode::CtrlO => {
+                    self.views[self.current_view].on_open_file();
+                    let cmd = self.statline_input();
+                    if let Some(StatlineCommand::OpenFile(fname)) = cmd {
+                        match read_to_string(Path::new(&fname)) {
+                            Ok(data) => {
+                                let lines_to_print = self.get_view().win_size.1 - 1;
+                                let mut lindex = 0;
+                                self.buffers[self.current_buffer].lock().unwrap().clear_buffer_contents();
+                                self.buffers[self.current_buffer].lock().unwrap().insert_data(&data);
+                                let d_to_print = data.chars().take_while(|ch| {
+                                    if *ch == '\n' {
+                                        lindex += 1;
+                                    }
+                                    lindex < lines_to_print
+                                }).collect::<String>();
+                                self.views[self.current_view].init();
+                                d_to_print.chars().for_each(|c| {
+                                    self.views[self.current_view].write_character(c);
+                                });
+                                self.buffers[self.current_buffer].lock().unwrap().set_textpos(0);
+                                self.views[self.current_view].view_cursor = ViewCursor::default();
+                            },
+                            Err(e) => {
+
+                            }
+                        }
+                    }
+                    self.views[self.current_view].restore_statline();
+                },
+                KeyCode::CtrlA => {
+                    let tp = self.buffers[self.current_buffer].lock().unwrap().get_textpos();
+                    print!("Text buffer position: absolute: {}, line_start_absolute: {}, line_number: {}, line column position: {}\r\n", tp.absolute, tp.line_start_absolute, tp.line_number, tp.get_line_position());
+                    print!("Text buffer get line at buffer cursor: {}\r\n", self.buffers[self.current_buffer].lock().unwrap().get_line_number());
+                    print!("View cursor position: {},{}", self.views[self.current_view].view_cursor.col, self.views[self.current_view].view_cursor.row);
+                    stdout().lock().flush();
+                    self.views[self.current_view].update_cursor();
+                },
+                KeyCode::CtrlB => {
+                    self.views[self.current_view].reset();
+                },
                 KeyCode::CtrlQ => {
                     println!("Buffer content: {} \r\nQuitting...\r\n", self.buffers[0].lock().unwrap().dump_to_string());
                     self.running = false;
                 },
-                KeyCode::Escaped(_esk) => {},
+                KeyCode::Escaped(_esk) => {
+                    // println!("Trying to move cursor...");
+                    match _esk {
+                        EscapeKeyCode::Right => {
+                            let old_pos = self.buffers[self.current_buffer].lock().unwrap().get_textpos();
+                            let pos = self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Char(MoveDir::Next)).unwrap();
+                            if old_pos != pos {
+                                if pos.line_number > old_pos.line_number {
+                                    println!("Trying to move right...");
+                                    self.views[self.current_view].view_cursor.row += 1;
+                                    self.views[self.current_view].view_cursor.col = 1;
+                                } else {
+                                    self.views[self.current_view].view_cursor.col += 1;
+                                }
+                                self.views[self.current_view].update_cursor();
+                            }
+                        },
+                        EscapeKeyCode::Left => {
+                            let old_pos = self.buffers[self.current_buffer].lock().unwrap().get_textpos();
+                            let pos = self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Char(MoveDir::Previous)).unwrap();
+                            if old_pos != pos {
+                                if pos.line_number < old_pos.line_number {
+                                    self.views[self.current_view].view_cursor.row -= 1;
+                                    self.views[self.current_view].view_cursor.col = pos.get_line_position() + 1;
+                                } else {
+                                    if self.views[self.current_view].view_cursor.col > 1 {
+                                        self.views[self.current_view].view_cursor.col -= 1;
+                                    }
+                                }
+                                self.views[self.current_view].update_cursor();
+                            }
+                        }
+                        EscapeKeyCode::Up => {
+                            self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Line(MoveDir::Previous));
+                        }
+                        EscapeKeyCode::Down => {
+                            self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Line(MoveDir::Next));
+                        }
+                    }
+                    // print!("{}", _esk.output());stdout().lock().flush();
+                },
                 KeyCode::None => println!("Could not handle keypress!\r")
             }
+            self.views[self.current_view].draw_view();
         }
     }
 
@@ -180,9 +336,12 @@ impl Editor {
         unsafe {
             while read(STDIN_FILENO, ch_buf.as_mut_ptr() as *mut libc::c_void, 1) == 0 {}
             let input = match ch_buf[0] {
+                1 => KeyCode::CtrlA,
+                2 => KeyCode::CtrlB,
                 8 => KeyCode::CtrlBackspace,
                 9 => KeyCode::Tab,
                 13 => KeyCode::Enter,
+                15 => KeyCode::CtrlO,
                 17 => KeyCode::CtrlQ,
                 27 => {
                     self.interpret_input_sequence()

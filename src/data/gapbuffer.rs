@@ -58,8 +58,11 @@ impl <T> GapBuffer<T> {
     }
 
     pub fn set_gap_position(&mut self, pos: usize) {
+        if pos == self.get_pos() {
+            return;
+        }
         if pos > self.len() {
-            panic!("Index {} out of bounds", pos);
+            panic!("GapBuffer index {} out of bounds", pos);
         }
         unsafe {
             let gap = self.gap.clone();
@@ -93,7 +96,7 @@ impl <T> GapBuffer<T> {
     }
 
     /**
-    Works like the "delete" key when you edit text. It deletes what is BEFORE the cursor. (gap.end + 1)
+    Works like the "delete" key when you edit text. It deletes what is AFTER the cursor. (gap.end + 1)
     */
     pub fn delete(&mut self) -> Option<T> {
         if self.gap.end == self.capacity() {
@@ -211,6 +214,15 @@ impl<'a, T> Iterator for GapBufferIterator<'a, T> {
          if predicate(ch) {
              return Some(self.start);
          }
+        }
+        None
+    }
+
+    fn rposition<P>(&mut self, mut predicate: P) -> Option<usize> where P: FnMut(Self::Item) -> bool, Self: ExactSizeIterator + DoubleEndedIterator, {
+        while let Some(ch) = self.next_back() {
+            if predicate(ch) {
+                return Some(self.end)
+            }
         }
         None
     }
