@@ -1,5 +1,5 @@
-pub mod gapbuffer;
-pub mod textbuffer;
+pub mod gap_buffer;
+pub mod text_buffer;
 
 pub trait Buffer<T> where T: Sized {
     fn insert(&mut self, data: T);
@@ -13,7 +13,7 @@ pub trait BufferString {
 
 #[cfg(test)]
 mod tests {
-    use super::gapbuffer::GapBuffer as GB;
+    use super::gap_buffer::GapBuffer as GB;
     // use super::Gap::GapBuffer as GB;
     use super::BufferString;
 

@@ -1,26 +1,23 @@
 use crate::editor::view::View;
 use std::path::Path;
-use crate::data::textbuffer::Textbuffer;
+use crate::data::text_buffer::Textbuffer;
 use std::sync::{Arc, Mutex};
 use std::os::unix::io::RawFd;
 use termios::Termios;
 use termios::tcsetattr;
 use std::str::from_utf8;
-
-use std::fs::{File, read_to_string};
-
+use std::fs::{read_to_string};
 use libc::read as read;
-use crate::editor::view::WinDim;
 use std::io::stdout;
-use std::io::{Write, Read};
+use std::io::{Write};
 use crate::cmd::MoveKind;
 use crate::cmd::MoveDir;
 use crate::editor::view::ViewCursor;
-
 pub enum KeyCode {
     CtrlBackspace,
     CtrlA,
     CtrlB,
+    CtrlS,
     CtrlO,
     CtrlQ,
     Enter,
@@ -31,7 +28,6 @@ pub enum KeyCode {
     Escaped(EscapeKeyCode),
     None,
 }
-
 pub enum EscapeKeyCode {
     Left,
     Right,
@@ -42,24 +38,6 @@ pub enum EscapeKeyCode {
 pub enum InputMode {
     StatLine,
     Document
-}
-
-
-
-impl From<i8> for KeyCode {
-    fn from(v: i8) -> Self {
-        match v {
-            9 => KeyCode::Tab,
-            10 => KeyCode::Enter,
-            27 => KeyCode::Esc,
-            127 => KeyCode::Backspace,
-            c @ _ if 32 <= c || c < 127 => KeyCode::Character((c as u8) as char),
-            _ => {
-                println!("Could not convert value to keycode");
-                KeyCode::None
-            }
-        }
-    }
 }
 
 pub struct Editor {
@@ -119,8 +97,6 @@ impl Editor {
         self.original_terminal_settings = settings;
         self.buffers.push(Arc::new(Mutex::new(Textbuffer::new())));
         let mut v = View::new().unwrap_or_else(|| View::new().unwrap());
-        let dim = v.get_window_size().and_then(|ws| Some(WinDim::from(ws))).unwrap_or(WinDim(0, 0));
-        let esc = 27u8;
         v.set_viewed_buf(self.buffers[0].clone());
         v.init();
         self.views.push(v);
@@ -128,13 +104,13 @@ impl Editor {
     }
 
     pub fn open(&mut self, f: &Path) {
-        let mut rcBuf = Arc::new(Mutex::new(Textbuffer::from_file(f.to_str().unwrap().to_string())));
+        let rc_buf = Arc::new(Mutex::new(Textbuffer::from_file(f.to_str().unwrap().to_string())));
         if self.views.len() == 0 {
             let mut v = View::new().unwrap_or_else(|| View::new().unwrap());
-            v.set_viewed_buf(rcBuf);
+            v.set_viewed_buf(rc_buf);
             self.views.push(v);
         } else {
-            self.views[self.current_view].set_viewed_buf(rcBuf);
+            self.views[self.current_view].set_viewed_buf(rc_buf);
         }
     }
 
@@ -163,7 +139,6 @@ impl Editor {
                 }
             }
         }
-        None
     }
 
     pub fn get_view(&mut self) -> &mut View {
@@ -179,7 +154,16 @@ impl Editor {
                     self.buffers[0].lock().unwrap().insert_ch(c);
                     self.views[self.current_view].write_character(c);
                 },
-                KeyCode::Backspace => self.buffers[0].lock().unwrap().remove(),
+                KeyCode::Backspace => {
+                    let line_number = self.buffers[0].lock().unwrap().get_line_number_editing();
+                    self.buffers[0].lock().unwrap().remove();
+                    if line_number < self.buffers[0].lock().unwrap().get_line_number_editing() {
+                        // TODO: Redraw entire screen, because removing a line, will alter positions of every line after it
+                    }
+                    let line = self.buffers[0].lock().unwrap().get_line_at_cursor();
+                    self.views[0].view_cursor.col = 1;
+                    self.views[0].update_with_line(&line);
+                },
                 KeyCode::Tab => self.buffers[0].lock().unwrap().insert_data("    ".into()),
                 KeyCode::Enter => {
                     self.buffers[0].lock().unwrap().insert_ch('\n');
@@ -187,6 +171,12 @@ impl Editor {
                 },
                 KeyCode::Esc => {},
                 KeyCode::CtrlBackspace => {},
+                KeyCode::CtrlS => {
+                    /* TODO: open status line if we do not have a filename, write in filename
+                            validate provided path, open a new file with that name -> write contents.
+                            reset statusline.
+                    */
+                }
                 KeyCode::CtrlO => {
                     self.views[self.current_view].on_open_file();
                     let cmd = self.statline_input();
@@ -210,7 +200,7 @@ impl Editor {
                                 self.buffers[self.current_buffer].lock().unwrap().set_textpos(0);
                                 self.views[self.current_view].view_cursor = ViewCursor::default();
                             },
-                            Err(e) => {
+                            Err(_e) => {
 
                             }
                         }
@@ -222,7 +212,7 @@ impl Editor {
                     print!("Text buffer position: absolute: {}, line_start_absolute: {}, line_number: {}, line column position: {}\r\n", tp.absolute, tp.line_start_absolute, tp.line_number, tp.get_line_position());
                     print!("Text buffer get line at buffer cursor: {}\r\n", self.buffers[self.current_buffer].lock().unwrap().get_line_number());
                     print!("View cursor position: {},{}", self.views[self.current_view].view_cursor.col, self.views[self.current_view].view_cursor.row);
-                    stdout().lock().flush();
+                    stdout().flush();
                     self.views[self.current_view].update_cursor();
                 },
                 KeyCode::CtrlB => {
@@ -343,6 +333,7 @@ impl Editor {
                 13 => KeyCode::Enter,
                 15 => KeyCode::CtrlO,
                 17 => KeyCode::CtrlQ,
+                19 => KeyCode::CtrlS,
                 27 => {
                     self.interpret_input_sequence()
                 },

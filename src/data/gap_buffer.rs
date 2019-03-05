@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::ptr::copy as copyrange;
 use super::BufferString;
 use std::ops::Index;
-use crate::data::textbuffer::Cursor;
+use crate::data::text_buffer::Cursor;
 
 pub struct GapBuffer<T> {
     data: Vec<T>,

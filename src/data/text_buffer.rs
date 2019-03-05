@@ -1,10 +1,9 @@
-use crate::data::gapbuffer::GapBuffer;
+use crate::data::gap_buffer::GapBuffer;
 use crate::editor::view::View;
 use std::cmp::Ordering;
 use crate::cmd::MoveKind;
 use crate::cmd::MoveDir::{Next, Previous};
 use crate::data::BufferString;
-use std::path::Component::CurDir;
 use std::sync::Arc;
 use crate::comms::observer::EventListener;
 use crate::comms::observer::Event;
@@ -26,11 +25,6 @@ pub enum TextObject {
     Word(usize, usize, RangeType),
     Line(usize, usize, RangeType),
     Block(usize, usize, RangeType)
-}
-
-enum Input {
-    Character(char),
-    Whitespace(char),
 }
 
 #[derive(Clone)]
@@ -187,21 +181,18 @@ impl Textbuffer {
     }
 
     pub fn get_line_at_cursor(&mut self) -> String {
-        self.data.read_string(
-            self.data
-            .iter_begin_to_cursor(Cursor::Buffer).rev()
-            .position(|ch| *ch == '\n')
-            .unwrap_or(0)
-            ..
-            self.data
-            .iter_cursor_to_end(Cursor::Buffer)
-            .position(|ch| *ch == '\n')
-            .unwrap_or(self.data.len()))
+        let line_begin_absolute = (0..self.data.get_pos()).into_iter().rposition(|idx| self.data[idx] == '\n').and_then(|pos| Some(pos + 1)).unwrap_or(0usize);
+        let line_end_absolute = (self.data.get_pos()..self.data.len()).into_iter().position(|idx| self.data[idx] == '\n').and_then(|pos| Some(pos + 1)).unwrap_or(self.data.len());
+        self.data.read_string(line_begin_absolute..line_end_absolute)
     }
 
     pub fn get_line_number(&self) -> usize {
         let lv1: Vec<char> = (0..self.data.get_pos()).into_iter().rev().filter(|idx| self.data[*idx] == '\n').map(|i| self.data[i]).collect();
         lv1.len() + 1
+    }
+
+    pub fn get_line_number_editing(&self) -> usize {
+        self.cursor.line_number
     }
 
     pub fn get_text_position_info(&self, pos: usize) -> TextPosition {

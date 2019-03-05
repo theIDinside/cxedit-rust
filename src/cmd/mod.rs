@@ -33,7 +33,3 @@ pub enum UserEvent {
     Command(Command),
     Operation(Operation),
 }
-
-pub enum KeyEvent {
-
-}

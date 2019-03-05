@@ -1,6 +1,6 @@
 use crate::comms::observer::{EventListener, Event};
-use crate::data::textbuffer::Textbuffer;
-use libc::{STDOUT_FILENO, STDIN_FILENO, STDERR_FILENO, c_int, c_ulong, winsize};
+use crate::data::text_buffer::Textbuffer;
+use libc::{STDOUT_FILENO, STDIN_FILENO, c_int, c_ulong, winsize};
 use std::mem::zeroed;
 
 static TIOCGWINSZ: c_ulong = 0x5413; // Enum value basically, for requesting terminal window size
@@ -9,27 +9,15 @@ use std::sync::{Arc, Mutex};
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::fmt::Error as FmtError;
-use std::rc::Rc;
-use crate::data::textbuffer::TextPosition;
+use crate::data::text_buffer::TextPosition;
 use std::fmt::Error;
 use std::io::stdout;
 use std::io::Write;
 
+use crate::editor::color::{SetColor, Color};
+
 #[derive(Debug)]
 pub struct WinDim(pub u16, pub u16);
-
-#[derive(Clone)]
-pub enum Color {
-    Black = 30,
-    Red = 31,
-    Green = 32,
-    Yellow = 33,
-    Blue = 34,
-    Magenta = 35,
-    Cyan = 36,
-    White = 37,
-    BrightCyan = 96
-}
 
 pub enum ViewOperations {
     ClearLineRest,
@@ -43,30 +31,6 @@ impl ViewOperations {
     }
 }
 
-
-pub enum SetColor {
-    Foreground(Color),
-    Background(Color)
-}
-
-impl SetColor {
-    fn colorize(&self, data: &str) -> String {
-        format!("{}{}\x1b[m", self, data)
-    }
-}
-
-impl Display for SetColor {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        match self {
-            SetColor::Foreground(color) => {
-                write!(f, "\x1b[38;5;{}m", color.clone() as u8)
-            },
-            SetColor::Background(color) => {
-                write!(f, "\x1b[48;5;{}m", color.clone() as u8 + 10)
-            }
-        }
-    }
-}
 
 
 impl Display for WinDim {
@@ -110,7 +74,7 @@ pub trait ScreenUpdate {
 
 /*
     TODO: Build view and buffer using the Observer pattern. This way, we decouple some overly complex
-        responsibility from the controller (Editor.rs), so that when the buffer contents gets updated,
+        responsibility from the controller (editor.rs), so that when the buffer contents gets updated,
         it will notify the view with an Event, and whatever content that might have been added or removed,
         along with it's "anchor" position (either beginning, for insertion & deletion, or end for removal)
 */
@@ -231,7 +195,7 @@ impl View {
                self.view_cfg.bg_color.colorize(res.as_ref()),
                self.view_cfg.stat_line_color.0.colorize(status.as_ref()),
                esc as char);
-        stdout().lock().flush();
+        stdout().flush();
         self.view_cursor = ViewCursor::default();
         // clear the screen
         // paint the screen with default colors (or color settings provided via .rc file)
@@ -243,10 +207,10 @@ impl View {
         unsafe {
             let mut window: winsize = zeroed();
             let mut win_size = WinSize::new();
-            let mut result = ioctl(STDOUT_FILENO, TIOCGWINSZ, &mut window);
+            let result = ioctl(STDOUT_FILENO, TIOCGWINSZ, &mut window);
             if result == -1 {
                 window = zeroed();
-                let mut result = ioctl(STDIN_FILENO, TIOCGWINSZ, &mut window);
+                let result = ioctl(STDIN_FILENO, TIOCGWINSZ, &mut window);
                 if result != -1 {
                     win_size.ws_ypixel = window.ws_ypixel;
                     win_size.ws_xpixel = window.ws_xpixel;
@@ -269,8 +233,8 @@ impl View {
     pub fn on_open_file(&mut self) {
         let open_title = "[open]: ";
         self.statline_view_cursor.col = open_title.len() + 1;
-        print!("{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, open_title);
-        stdout().lock().flush();
+        print!("{}{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, open_title, ViewOperations::ClearLineRest.as_output());
+        stdout().flush();
     }
 
     pub fn restore_statline(&mut self) {
@@ -279,24 +243,24 @@ impl View {
         stat.replace_range(0..stat_title.len(), stat_title);
         self.statline_view_cursor.col = stat_title.len() + 1;
         print!("{}{}{}{}\x1b[m{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, stat, self.view_cursor);
-        stdout().lock().flush();
+        stdout().flush();
     }
 
     pub fn write_statline_character(&mut self, ch: char) {
         print!("{}{}{}{}", self.statline_view_cursor, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, ch);
-        stdout().lock().flush();
+        stdout().flush();
         self.statline_view_cursor.col += 1;
     }
 
     pub fn update_statline_with(&mut self, data: &str) {
-        print!("{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, data);
+        print!("{}{}{}{}\r", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, data);
+        stdout().flush();
     }
 
     pub fn reset(&mut self) {
         let esc: u8 = 27;
         print!("{}[2J{}[1;1H", esc as char, esc as char);
         self.view_cursor = ViewCursor::default();
-        let pos = self.buffer_ref.lock().unwrap().get_textpos();
         let dat = self.buffer_ref.lock().unwrap().dump_to_string();
         for c in dat.chars() {
             self.write_character(c);
@@ -304,33 +268,37 @@ impl View {
         self.buffer_ref.lock().unwrap().set_textpos(dat.len() - 1);
         // self.view_cursor = ViewCursor { row: pos.get_line_position(), col: pos.line_number + 1 };
         self.update_cursor();
-        // stdout().lock().flush();
+        // stdout().flush();
     }
 
     pub fn write_character(&mut self, ch: char) {
         // TODO: check if the last character was a whitespace, if so, scan the buffer backwards one word, and check if it should be syntax colored
-        let mut next = self.view_cursor;
         if ch == '\n' {
             self.view_cursor.row += 1;
             self.view_cursor.col = 1;
             print!("\r\n");
-            stdout().lock().flush();
+            stdout().flush();
         } else {
             self.view_cursor.col += 1;
             print!("{}{}{}", self.view_cfg.bg_color, self.view_cfg.fg_color, ch);
-            stdout().lock().flush();
+            stdout().flush();
         }
     }
 
+    pub fn update_with_line(&mut self, data: &str) {
+        print!("{}{}{}", self.view_cursor, ViewOperations::ClearLineRest.as_output(), data);
+        stdout().flush();
+    }
+
     pub fn update_cursor(&self) {
-        let WinDim(x, y) = self.win_size;
+        let WinDim(x, _y) = self.win_size;
         let cursor_output_pos = WinDim(x-6, 1);
         let WinDim(valx, valy) = cursor_output_pos;
         let vc_pos = ViewCursor {col: valx as usize, row: valy as usize};
         let vop = ViewOperations::ClearLineRest;
         print!("{}{}{};{}", vc_pos, vop.as_output(), self.view_cursor.col, self.view_cursor.row);
         print!("{}", self.view_cursor);
-        stdout().lock().flush();
+        stdout().flush();
     }
 
     pub fn set_viewed_buf(&mut self, buf: Arc<Mutex<Textbuffer>>) {
@@ -338,16 +306,16 @@ impl View {
         self.buffer_ref = bufref;
     }
 
-    pub fn move_right(&mut self, steps: usize) {
-
+    pub fn move_right(&mut self, _steps: usize) {
+        unimplemented!()
     }
 
-    pub fn move_left(&mut self, steps: usize) {
-
+    pub fn move_left(&mut self, _steps: usize) {
+        unimplemented!()
     }
 
-    pub fn move_up(&mut self, steps: usize) {
-
+    pub fn move_up(&mut self, _steps: usize) {
+        unimplemented!()
     }
 
     pub fn move_down(&mut self, _steps: usize) {
