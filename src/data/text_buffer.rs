@@ -8,6 +8,13 @@ use std::sync::Arc;
 use crate::comms::observer::EventListener;
 use crate::comms::observer::Event;
 use crate::comms::observer::EventData;
+use std::path::Path;
+use std::fs::File;
+use std::io::Write;
+use crate::data::FileResult;
+use crate::data::SaveFileError;
+use crate::editor::FileOpt;
+use std::error::Error;
 
 pub enum ObjectKind {
     Word,
@@ -205,6 +212,7 @@ impl Textbuffer {
         tp
     }
 
+
     pub fn get_line_start_abs(&self, line_number: usize) -> Option<TextPosition> {
         let lines_endings: Vec<usize> =
             (0..self.data.len())
@@ -250,7 +258,7 @@ impl Textbuffer {
                         Some(self.cursor.clone())
                     },
                     Next => {
-                        if self.cursor.absolute + 1 < self.data.len() {
+                        if self.cursor.absolute + 1 <= self.data.len() {
                             // self.cursor.absolute += 1;
                             if let Some(ch) = self.data.get(self.cursor.absolute) {
                                 if *ch == '\n' {
@@ -350,6 +358,35 @@ impl Textbuffer {
     pub fn dump_to_string(&self) -> String {
         use crate::data::BufferString;
         self.data.read_string(0..self.data.len()+1)
+    }
+
+    pub fn save_to_file(&self, file_name: &Path, save_opts: Option<FileOpt>) -> FileResult<usize> {
+        if file_name.exists() {
+            return Err(SaveFileError::FileExisted(file_name.to_str().unwrap().into()));
+        }
+
+        match save_opts {
+            None => {
+                match File::create(file_name) {
+                    Ok(ref mut f) => {
+                        f.write(self.dump_to_string().as_bytes()).map_err(|std_err| SaveFileError::Other(file_name.to_str().unwrap().into(), std_err.description().into()))
+                    },
+                    Err(e) => {
+                        Err(SaveFileError::Other(file_name.to_str().unwrap().to_string(), e.description().into()))
+                    }
+                }
+            },
+            Some(fopt) => {
+                match fopt {
+                    FileOpt::NoOverwrite => {
+                        Ok(0)
+                    },
+                    FileOpt::Overwrite => {
+                        Ok(0)
+                    }
+                }
+            }
+        }
     }
 
     pub fn len(&self) -> usize {

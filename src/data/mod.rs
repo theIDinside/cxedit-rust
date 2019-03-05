@@ -1,5 +1,36 @@
+use std::fmt::{Display, Formatter as Fmt, Error as FmtError};
+use std::error;
+use crate::data::SaveFileError::Other;
+
 pub mod gap_buffer;
 pub mod text_buffer;
+
+type FileName = String;
+type SourceErrorMessage = String;
+#[derive(Debug)]
+pub enum SaveFileError {
+    FileExisted(FileName),
+    Other(FileName, SourceErrorMessage)
+}
+
+pub type FileResult<T> = std::result::Result<T, SaveFileError>;
+impl Display for SaveFileError {
+    fn fmt(&self, f: &mut Fmt) -> Result<(), FmtError> {
+        let res = match self {
+            SaveFileError::FileExisted(fname) => {
+                fname.chars().chain(" exists already, writing to file denied.".chars()).collect::<String>()
+            },
+            Other(fname, cause) => {
+                "Writing to "
+                    .chars()
+                    .chain(fname.chars())
+                    .chain(" failed. Underlying cause was: ".chars())
+                    .chain(cause.chars()).collect::<String>()
+            }
+        };
+        write!(f, "{}", res)
+    }
+}
 
 pub trait Buffer<T> where T: Sized {
     fn insert(&mut self, data: T);

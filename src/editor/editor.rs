@@ -1,18 +1,15 @@
-use crate::editor::view::View;
 use std::path::Path;
 use crate::data::text_buffer::Textbuffer;
 use std::sync::{Arc, Mutex};
 use std::os::unix::io::RawFd;
-use termios::Termios;
-use termios::tcsetattr;
+use termios::{Termios, tcsetattr};
 use std::str::from_utf8;
 use std::fs::{read_to_string};
 use libc::read as read;
-use std::io::stdout;
-use std::io::{Write};
-use crate::cmd::MoveKind;
-use crate::cmd::MoveDir;
-use crate::editor::view::ViewCursor;
+use std::io::{Write, stdout};
+use crate::cmd::{MoveKind, MoveDir};
+use crate::editor::{view::ViewCursor, view::View};
+
 pub enum KeyCode {
     CtrlBackspace,
     CtrlA,
@@ -76,10 +73,15 @@ impl EscapeKeyCode {
     }
 }
 
+
+#[derive(Clone)]
 pub enum StatlineCommand {
-    OpenFile(String)
+    OpenFile(Option<String>),
+    SaveFile(Option<String>)
 }
 
+use self::StatlineCommand::{SaveFile, OpenFile};
+use crate::data::SaveFileError;
 impl Editor {
     pub fn new() -> Editor {
         Editor {
@@ -114,7 +116,7 @@ impl Editor {
         }
     }
 
-    pub fn statline_input(&mut self) -> Option<StatlineCommand> {
+    pub fn statline_input(&mut self, statcmd: StatlineCommand) -> Option<StatlineCommand> {
         let mut input = String::new();
         loop {
             match self.handle_keypress() {
@@ -129,7 +131,14 @@ impl Editor {
                     self.views[self.current_view].update_statline_with(&old_content);
                 }
                 KeyCode::Enter => {
-                    return Some(StatlineCommand::OpenFile(input.clone()));
+                    return match statcmd {
+                        StatlineCommand::OpenFile(_) => {
+                            Some(StatlineCommand::OpenFile(Some(input.clone())))
+                        },
+                        StatlineCommand::SaveFile(_) => {
+                            Some(StatlineCommand::SaveFile(Some(input.clone())))
+                        }
+                    };
                 },
                 KeyCode::Esc => {
                     return None;
@@ -149,7 +158,9 @@ impl Editor {
         // TODO: setup code, and also
         // println!("Entering editor main loop:\r");
         while self.running {
-            match self.handle_keypress() {
+            let kp = self.handle_keypress();
+            self.views[0].restore_statline();
+            match kp {
                 KeyCode::Character(c) => {
                     self.buffers[0].lock().unwrap().insert_ch(c);
                     self.views[self.current_view].write_character(c);
@@ -157,14 +168,22 @@ impl Editor {
                 KeyCode::Backspace => {
                     let line_number = self.buffers[0].lock().unwrap().get_line_number_editing();
                     self.buffers[0].lock().unwrap().remove();
-                    if line_number < self.buffers[0].lock().unwrap().get_line_number_editing() {
+                    if line_number > self.buffers[0].lock().unwrap().get_line_number_editing() {
                         // TODO: Redraw entire screen, because removing a line, will alter positions of every line after it
+                        self.views[0].view_cursor.row -= 1;
+                        self.views[0].draw_view();
+                    } else {
+                        let line = self.buffers[0].lock().unwrap().get_line_at_cursor();
+                        self.views[0].view_cursor.col -= 1;
+                        self.views[0].update_with_line(&line);
                     }
-                    let line = self.buffers[0].lock().unwrap().get_line_at_cursor();
-                    self.views[0].view_cursor.col = 1;
-                    self.views[0].update_with_line(&line);
                 },
-                KeyCode::Tab => self.buffers[0].lock().unwrap().insert_data("    ".into()),
+                KeyCode::Tab => {
+                    self.buffers[0].lock().unwrap().insert_data("    ");
+                    for _ in 0..4 {
+                        self.views[0].write_character(' ');
+                    }
+                },
                 KeyCode::Enter => {
                     self.buffers[0].lock().unwrap().insert_ch('\n');
                     self.views[self.current_view].write_character('\n');
@@ -176,11 +195,25 @@ impl Editor {
                             validate provided path, open a new file with that name -> write contents.
                             reset statusline.
                     */
-                }
+                    // TODO: implement 2 functions, one that will write without asking for new file name/ask if ok, and one that does
+                    self.views[0].on_save_file();
+                    let cmd = self.statline_input(SaveFile(None));
+                    if let Some(SaveFile(Some(suggested_fname))) = cmd {
+                        let p = Path::new(&suggested_fname);
+                        match self.buffers[0].lock().unwrap().save_to_file(p, None) {
+                            Ok(file_size) => {
+                                self.views[0].write_statline_line("[saved]: ", suggested_fname.chars().chain(" successfully! Size: ".chars()).chain(file_size.to_string().chars()).collect::<String>().as_ref());
+                            },
+                            Err(e) => {
+                                self.views[0].write_statline_line("[error]: ", &format!("{}", e))
+                            }
+                        }
+                    }
+                },
                 KeyCode::CtrlO => {
                     self.views[self.current_view].on_open_file();
-                    let cmd = self.statline_input();
-                    if let Some(StatlineCommand::OpenFile(fname)) = cmd {
+                    let cmd = self.statline_input(OpenFile(None));
+                    if let Some(StatlineCommand::OpenFile(Some(fname))) = cmd {
                         match read_to_string(Path::new(&fname)) {
                             Ok(data) => {
                                 let lines_to_print = self.get_view().win_size.1 - 1;
@@ -208,6 +241,8 @@ impl Editor {
                     self.views[self.current_view].restore_statline();
                 },
                 KeyCode::CtrlA => {
+                    // N.B! This is a debug function ONLY. Used in the beginning for testing display functions, cursor navigation etc
+                    // This will become something else entirely.
                     let tp = self.buffers[self.current_buffer].lock().unwrap().get_textpos();
                     print!("Text buffer position: absolute: {}, line_start_absolute: {}, line_number: {}, line column position: {}\r\n", tp.absolute, tp.line_start_absolute, tp.line_number, tp.get_line_position());
                     print!("Text buffer get line at buffer cursor: {}\r\n", self.buffers[self.current_buffer].lock().unwrap().get_line_number());

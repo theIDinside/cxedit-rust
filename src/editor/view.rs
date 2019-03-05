@@ -15,6 +15,7 @@ use std::io::stdout;
 use std::io::Write;
 
 use crate::editor::color::{SetColor, Color};
+use crate::editor::view::ViewOperations::ClearLineRest;
 
 #[derive(Debug)]
 pub struct WinDim(pub u16, pub u16);
@@ -237,6 +238,13 @@ impl View {
         stdout().flush();
     }
 
+    pub fn on_save_file(&mut self) {
+        let open_title = "[save]: ";
+        self.statline_view_cursor.col = open_title.len() + 1;
+        print!("{}{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, open_title, ViewOperations::ClearLineRest.as_output());
+        stdout().flush();
+    }
+
     pub fn restore_statline(&mut self) {
         let mut stat = " ".repeat(self.win_size.0 as usize);
         let stat_title = "[status]: ";
@@ -250,6 +258,11 @@ impl View {
         print!("{}{}{}{}", self.statline_view_cursor, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, ch);
         stdout().flush();
         self.statline_view_cursor.col += 1;
+    }
+
+    pub fn write_statline_line(&self, title: &str, content: &str) {
+        print!("{}{}{}{}{}{}", self.status_line_position, ViewOperations::ClearLineRest.as_output(), self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, title, content);
+        stdout().flush();
     }
 
     pub fn update_statline_with(&mut self, data: &str) {
@@ -286,7 +299,10 @@ impl View {
     }
 
     pub fn update_with_line(&mut self, data: &str) {
-        print!("{}{}{}", self.view_cursor, ViewOperations::ClearLineRest.as_output(), data);
+        let empty_space = self.win_size.0 as usize - data.len();
+        let mut vc = self.view_cursor;
+        vc.col = 1;
+        print!("{}{}{}{}{}", vc, ViewOperations::ClearLineRest.as_output(), self.view_cfg.fg_color, self.view_cfg.bg_color, &data.chars().chain(" ".repeat(empty_space as usize).chars()).collect::<String>());
         stdout().flush();
     }
 
