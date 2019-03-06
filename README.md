@@ -33,4 +33,4 @@ or
 ```bash
     ./target/debug/cxedit Cargo.toml
 ```
-![Example color setup](one color setup.png)
+![Example color setup](one_color_setup.png)
