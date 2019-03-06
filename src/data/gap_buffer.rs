@@ -58,9 +58,6 @@ impl <T> GapBuffer<T> {
     }
 
     pub fn set_gap_position(&mut self, pos: usize) {
-        if pos == self.get_pos() {
-            return;
-        }
         if pos > self.len() {
             panic!("GapBuffer index {} out of bounds", pos);
         }
@@ -110,7 +107,7 @@ impl <T> GapBuffer<T> {
     }
 
     /**
-    Works like the "delete" key when you edit text. It deletes what is BEFORE the cursor. (gap.start - 1)
+    Works like the "backspace" key when you edit text. It deletes what is BEFORE the cursor. (gap.start - 1)
     */
     pub fn remove(&mut self) -> Option<T> {
         if self.gap.start == 0 {

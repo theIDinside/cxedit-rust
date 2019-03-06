@@ -16,6 +16,8 @@ use std::io::Write;
 
 use crate::editor::color::{SetColor, Color};
 use crate::editor::view::ViewOperations::ClearLineRest;
+use std::thread::sleep;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct WinDim(pub u16, pub u16);
@@ -139,6 +141,15 @@ impl Default for ViewConfig {
 pub struct ViewCursor {
     pub row: usize,
     pub col: usize
+}
+
+impl From<TextPosition> for ViewCursor {
+    fn from(tp: TextPosition) -> Self {
+        ViewCursor {
+            row: tp.line_number + 1,
+            col: tp.get_line_position() + 1
+        }
+    }
 }
 
 impl Default for ViewCursor {
@@ -305,7 +316,10 @@ impl View {
         for c in dat.chars() {
             self.write_character(c);
         }
-        self.buffer_ref.lock().unwrap().set_textpos(dat.len() - 1);
+        if dat.len() > 0
+        {
+            self.buffer_ref.lock().unwrap().set_textpos(dat.len());
+        }
         // self.view_cursor = ViewCursor { row: pos.get_line_position(), col: pos.line_number + 1 };
         self.update_cursor();
         // stdout().flush();
@@ -374,7 +388,42 @@ impl View {
 
     }
 
-    pub fn draw_view(&self) {
+    pub fn draw_view(&mut self) {
+        let tmp = self.view_cursor;
+        let abs_begin = self.top_line.absolute;
+        let line_count = self.win_size.1 - 1;
+        let d = {
+            let guard = self.buffer_ref.lock().unwrap();
+            let line_at = guard.get_line_start_abs(line_count as usize - 1usize).unwrap().absolute;
+            let buflen = guard.len();
+            let d = guard.get_data_range(abs_begin, line_at);
+            let esc = 27u8;
+            print!("{}[2J{}[1;1H", esc as char, esc as char);
+            let mut a = " ".repeat(self.win_size.0 as usize);
+            a.push('\n');
+            a.push('\r');
+            let res = a.repeat(self.win_size.1 as usize - 1);
+            let mut status = " ".repeat(self.win_size.0 as usize);
+            let status_title = "[status]: ";
+            self.statline_view_cursor.col = status_title.len() + 1;
+            status.replace_range(0..status_title.len(), status_title);
+            print!("{}{}{}{}[1;1H",
+                   self.view_cfg.bg_color.colorize(res.as_ref()),
+                   self.view_cfg.stat_line_color.1,
+                   self.view_cfg.stat_line_color.0.colorize(status.as_ref()),
+                   esc as char);
+            self.view_cursor = ViewCursor::default();
+            // clear the screen
+            // paint the screen with default colors (or color settings provided via .rc file)
+            // set up status line
+            // paint status line
+            d
+        };
+        for c in d.chars() {
+            self.write_character(c);
+        }
+        self.view_cursor = tmp;
+        stdout().flush();
         /* TODO: get data from buffer in the range of top_line .. (top_line + (winsize.x * winsize.y)
             scan content, for new lines, and filter out any newlines that won't fit on screen
             i.e, newline count > winsize.y. newline count being, find newlines between absolute

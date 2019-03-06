@@ -15,6 +15,8 @@ use crate::data::FileResult;
 use crate::data::SaveFileError;
 use crate::editor::FileOpt;
 use std::error::Error;
+use std::thread::sleep;
+use std::time::Duration;
 
 pub enum ObjectKind {
     Word,
@@ -138,9 +140,12 @@ impl Textbuffer {
     pub fn get_textpos(&self) -> TextPosition {
         self.cursor.clone()
     }
+    pub fn get_gap_textpos(&self) -> TextPosition {
+        self.get_text_position_info(self.data.get_pos())
+    }
 
     pub fn set_textpos(&mut self, pos: usize) {
-        if pos < self.len() {
+        if pos <= self.len() {
             self.cursor = self.get_text_position_info(pos);
             self.data.set_gap_position(pos);
         }
@@ -187,10 +192,18 @@ impl Textbuffer {
         }
     }
 
-    pub fn get_line_at_cursor(&mut self) -> String {
+    pub fn get_line_at_cursor(&self) -> String {
         let line_begin_absolute = (0..self.data.get_pos()).into_iter().rposition(|idx| self.data[idx] == '\n').and_then(|pos| Some(pos + 1)).unwrap_or(0usize);
         let line_end_absolute = (self.data.get_pos()..self.data.len()).into_iter().position(|idx| self.data[idx] == '\n').and_then(|pos| Some(pos + 1)).unwrap_or(self.data.len());
         self.data.read_string(line_begin_absolute..line_end_absolute)
+    }
+
+    pub fn get_data_range(&self, begin: usize, end: usize) -> String {
+        if end > self.len() {
+            panic!("Index out of bounds!")
+        } else {
+            self.data.read_string(begin..end)
+        }
     }
 
     pub fn get_line_number(&self) -> usize {
@@ -205,7 +218,7 @@ impl Textbuffer {
     pub fn get_text_position_info(&self, pos: usize) -> TextPosition {
         let mut tp = TextPosition::new();
         let lv: Vec<char> = (0..pos).into_iter().rev().filter(|i| self.data[*i] == '\n').map(|i| self.data[i]).collect();
-        let lineno = lv.len() + 1;
+        let lineno = lv.len();
         tp.line_start_absolute = (0..pos).into_iter().rposition(|i| self.data[i] == '\n').and_then(|pos| Some(pos + 1)).unwrap_or(0usize);
         tp.line_number = lineno;
         tp.absolute = pos;
@@ -216,16 +229,32 @@ impl Textbuffer {
     pub fn get_line_start_abs(&self, line_number: usize) -> Option<TextPosition> {
         let lines_endings: Vec<usize> =
             (0..self.data.len())
+                .into_iter()
                 .filter(|idx| self.data[*idx] == '\n')
-                .skip(line_number-1)
-                .collect();
+                .collect::<Vec<usize>>().into_iter().enumerate().take_while(|(index, lineno)| {
+                index <= &line_number
+            }).map(|(i, l)| {
+                l
+            }).collect();
         // lines_endings[line_number - 1] points to the character \n, we actually want the character position, after that, for us to "actually" be on the new line
-        let this_line_abs = lines_endings[0] + 1;
-        Some(TextPosition::from((this_line_abs, this_line_abs, line_number)))
+        // println!("Size: {}", lines_endings.len());
+        if line_number > lines_endings.len() && lines_endings.len() == 0 {
+            Some(TextPosition::from((self.len(), 0, 1)))
+        } else if line_number > lines_endings.len() {
+            let this_line_abs = lines_endings[lines_endings.len()-1] + 1;
+            Some(TextPosition::from((this_line_abs, this_line_abs, lines_endings.len())))
+        } else {
+            let this_line_abs = lines_endings[lines_endings.len()-1] + 1;
+            Some(TextPosition::from((this_line_abs, this_line_abs, line_number)))
+        }
     }
 
     pub fn insert_data(&mut self, data: &str) {
         self.data.map_to(data.chars());
+    }
+
+    pub fn get_absolute_cursor_pos(&self) -> usize {
+        self.cursor.absolute
     }
 
     pub fn insert_ch(&mut self, ch: char) {
@@ -247,27 +276,21 @@ impl Textbuffer {
             MoveKind::Char(dir) => {
                 match dir {
                     Previous => {
-                        if self.cursor.get_line_position() == 0 {
-                            if self.cursor.line_number > 1 {
-                                let new_pos = self.cursor.absolute - 1;
-                                self.cursor = self.get_text_position_info(new_pos);
-                            }
-                        } else {
-                            self.cursor.absolute -= 1;
+                        if self.cursor.absolute > 0 {
+                            self.cursor = self.get_text_position_info(self.data.get_pos()-1);
+                            self.set_textpos(self.cursor.absolute);
                         }
                         Some(self.cursor.clone())
                     },
                     Next => {
-                        if self.cursor.absolute + 1 <= self.data.len() {
-                            // self.cursor.absolute += 1;
-                            if let Some(ch) = self.data.get(self.cursor.absolute) {
+                        if self.cursor.absolute < self.data.len() {
+                            self.cursor.absolute += 1;
+                            if let Some(ch) = self.data.get(self.cursor.absolute-1) {
                                 if *ch == '\n' {
-                                    self.cursor.absolute += 1;
                                     self.cursor = self.get_text_position_info(self.cursor.absolute);
-                                } else {
-                                    self.cursor.absolute += 1;
                                 }
                             }
+                            self.set_textpos(self.cursor.absolute);
                         }
                         Some(self.cursor.clone())
                     }
@@ -294,15 +317,23 @@ impl Textbuffer {
         }
     }
 
-    pub fn remove(&mut self) {
+    pub fn get_at(&self, pos: usize) -> Option<char> {
+        if let Some(c) = self.data.get(pos) {
+            Some(*c)
+        } else {
+            None
+        }
+    }
+
+    pub fn remove(&mut self) -> Option<char> {
         if let Some(c) = self.data.remove() {
             if c == '\n' {
                 self.line_count -= 1;
-                self.cursor.absolute -= 1;
-                self.cursor = self.get_text_position_info(self.cursor.absolute);
-            } else {
-                self.cursor.absolute -= 1;
             }
+            self.cursor = self.get_text_position_info(self.data.get_pos());
+            Some(c)
+        } else {
+            None
         }
     }
 

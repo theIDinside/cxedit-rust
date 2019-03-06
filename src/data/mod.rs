@@ -1,9 +1,9 @@
+pub mod gap_buffer;
+pub mod text_buffer;
 use std::fmt::{Display, Formatter as Fmt, Error as FmtError};
 use std::error;
 use crate::data::SaveFileError::Other;
 
-pub mod gap_buffer;
-pub mod text_buffer;
 
 type FileName = String;
 type SourceErrorMessage = String;
@@ -91,6 +91,19 @@ mod tests {
         gb.map_to("hello world!".chars());
         let c = gb.remove();
         assert_eq!("hello world", gb.read_string(0..25));
+    }
+
+    #[test]
+    fn test_insert_newline() {
+        let mut gb = GB::new();
+        gb.map_to("hello wor".chars());
+        println!("Range before moving pos: {:?}", gb.gap);
+        gb.set_gap_position(5);
+        println!("Range after moving pos: {:?}", gb.gap);
+        // gb.delete();
+        let a = gb.get(5);
+        gb.insert('\n');
+        assert_eq!("hello\n wor", gb.read_string(0..25));
     }
 
     #[test]

@@ -9,32 +9,22 @@ use libc::read as read;
 use std::io::{Write, stdout};
 use crate::cmd::{MoveKind, MoveDir, Command};
 use crate::editor::{view::ViewCursor, view::View};
-
-pub enum KeyCode {
-    CtrlBackspace,
-    CtrlA,
-    CtrlB,
-    CtrlS,
-    CtrlO,
-    CtrlQ,
-    Enter,
-    Tab,
-    Esc,
-    Backspace,
-    Character(char),
-    Escaped(EscapeKeyCode),
-    None,
-}
-pub enum EscapeKeyCode {
-    Left,
-    Right,
-    Up,
-    Down
-}
+use self::StatlineCommand::{SaveFile, OpenFile};
+use crate::data::SaveFileError;
+use crate::editor::view::ViewOperations;
+use crate::cfg::Config;
+use crate::editor::key::{KeyCode, EscapeKeyCode};
+use crate::cmd::command_engine::CommandEngine;
+use crate::cmd::command_engine::Action;
+use crate::cmd::command_engine::ActionResult;
+use std::thread::sleep;
+use std::time::Duration;
+use crate::editor::view::WinDim;
 
 pub enum InputMode {
-    StatLine,
-    Document
+    Insert,
+    Movement,
+    Command
 }
 
 pub struct Editor {
@@ -45,6 +35,8 @@ pub struct Editor {
     running: bool,
     original_terminal_settings: Option<Termios>,
     input_mode: InputMode,
+    config: Config,
+    c_e: CommandEngine
 }
 
 impl Drop for Editor {
@@ -62,49 +54,38 @@ impl Drop for Editor {
     }
 }
 
-impl EscapeKeyCode {
-    pub fn output(&self) -> &str {
-        match self {
-            EscapeKeyCode::Down => "\x1b[1B",
-            EscapeKeyCode::Up => "\x1b[1A",
-            EscapeKeyCode::Left => "\x1b[1D",
-            EscapeKeyCode::Right => "\x1b[1C"
-        }
-    }
-}
-
-
 #[derive(Clone)]
 pub enum StatlineCommand {
     OpenFile(Option<String>),
     SaveFile(Option<String>)
 }
 
-use self::StatlineCommand::{SaveFile, OpenFile};
-use crate::data::SaveFileError;
-use crate::editor::view::ViewOperations;
-
 impl Editor {
     pub fn new() -> Editor {
         Editor {
-            buffers: vec![],
+            buffers: vec![Arc::new(Mutex::new(Textbuffer::new()))],
             views: vec![],
             current_buffer: 0,
             current_view: 0,
             running: false,
             original_terminal_settings: None,
-            input_mode: InputMode::Document
+            input_mode: InputMode::Insert,
+            config: Config::default(),
+            c_e: CommandEngine::new(Arc::new(Mutex::new(Textbuffer::new())))
         }
     }
 
     pub fn init(&mut self, settings: Option<Termios>) {
         self.original_terminal_settings = settings;
-        self.buffers.push(Arc::new(Mutex::new(Textbuffer::new())));
+        if self.buffers.len() != 0 {
+            self.buffers.push(Arc::new(Mutex::new(Textbuffer::new())));
+        }
         let mut v = View::new().unwrap_or_else(|| View::new().unwrap());
         v.set_viewed_buf(self.buffers[0].clone());
         v.init();
         self.views.push(v);
         self.running = true;
+        self.c_e.register_buffer(self.buffers[0].clone());
     }
 
     pub fn open(&mut self, f: &Path) {
@@ -183,7 +164,13 @@ impl Editor {
                         },
                         Command::Find => unimplemented!(),
                         Command::Jump => unimplemented!(),
-                        Command::Move(mk) => unimplemented!()
+                        Command::Move(mk) => unimplemented!(),
+                        Command::Quit => {
+                            unimplemented!();
+                        },
+                        Command::CommandInput => {
+                            unimplemented!();
+                        }
                     };
                 },
                 KeyCode::Escaped(esc_kc) => {
@@ -230,25 +217,53 @@ impl Editor {
     pub fn run(&mut self) {
         // TODO: setup code, and also
         // println!("Entering editor main loop:\r");
-        while self.running {
+        let mut running = self.running;
+        while running {
             let kp = self.handle_keypress();
             self.views[0].restore_statline();
             match kp {
                 KeyCode::Character(c) => {
-                    self.buffers[0].lock().unwrap().insert_ch(c);
-                    self.views[self.current_view].write_character(c);
+                    let pos = *&self.buffers[0].lock().unwrap().get_textpos().absolute;
+                    match self.c_e.execute(Action::Insert(pos, c)) {
+                        ActionResult::OK => {
+                            self.views[self.current_view].write_character(c);
+                        },
+                        ActionResult::ERR => {
+
+                        }
+                    }
+                    // self.buffers[0].lock().unwrap().insert_ch(c);
                 },
                 KeyCode::Backspace => {
-                    let line_number = self.buffers[0].lock().unwrap().get_line_number_editing();
-                    self.buffers[0].lock().unwrap().remove();
-                    if line_number > self.buffers[0].lock().unwrap().get_line_number_editing() {
-                        // TODO: Redraw entire screen, because removing a line, will alter positions of every line after it
-                        self.views[0].view_cursor.row -= 1;
-                        self.views[0].draw_view();
-                    } else {
-                        let line = self.buffers[0].lock().unwrap().get_line_at_cursor();
-                        self.views[0].view_cursor.col -= 1;
-                        self.views[0].update_with_line(&line);
+                    let (line_number, pos) = {
+                        let guard = self.buffers[0].lock().unwrap();
+                        let line_number = guard.get_line_number_editing();
+                        let mut pos = guard.get_textpos().absolute;
+                        (line_number, pos)
+                    };
+                    if pos > 0 {
+                        let c = self.buffers[0].lock().unwrap().get_at(pos-1).unwrap();
+                        println!("\x1b[15;1H char to be removed: [{}]", c);
+                        match self.c_e.execute(Action::Remove(pos, c)) {
+                            ActionResult::OK => {
+                            // self.views[self.current_view].write_character(c);
+                            // self.buffers[0].lock().unwrap().remove();
+                            let lineedit = self.buffers[0].lock().unwrap().get_line_number_editing();
+                            if lineedit < line_number {
+                                // TODO: Redraw entire screen, because removing a line, will alter positions of every line after it
+                                self.views[0].view_cursor.row -= 1;
+                                self.views[0].view_cursor.col = self.buffers[0].lock().unwrap().get_line_at_cursor().len();
+                                self.views[0].draw_view();
+                            } else {
+                                let line = self.buffers[0].lock().unwrap().get_line_at_cursor();
+                                self.views[0].view_cursor.col -= 1;
+                                self.views[0].update_with_line(&line);
+                            }
+                            },
+                            ActionResult::ERR => {
+
+                            }
+                        }
                     }
                 },
                 KeyCode::Tab => {
@@ -318,6 +333,18 @@ impl Editor {
                         self.views[0].restore_statline();
                     }
                 },
+                KeyCode::CtrlZ => {
+                    let pos = *&self.buffers[0].lock().unwrap().get_textpos().absolute;
+                    match self.c_e.execute(Action::Undo) {
+                        ActionResult::OK => {
+                            // self.views[self.current_view].write_character(c);
+                            self.views[0].draw_view();
+                        },
+                        ActionResult::ERR => {
+
+                        }
+                    }
+                },
                 KeyCode::CtrlA => {
                     // N.B! This is a debug function ONLY. Used in the beginning for testing display functions, cursor navigation etc
                     // This will become something else entirely.
@@ -326,14 +353,18 @@ impl Editor {
                     print!("Text buffer get line at buffer cursor: {}\r\n", self.buffers[self.current_buffer].lock().unwrap().get_line_number());
                     print!("View cursor position: {},{}", self.views[self.current_view].view_cursor.col, self.views[self.current_view].view_cursor.row);
                     stdout().flush();
+
                     self.views[self.current_view].update_cursor();
                 },
                 KeyCode::CtrlB => {
                     self.views[self.current_view].reset();
                 },
+                KeyCode::CtrlC => {
+                    let command = self.config.get_binding(KeyCode::CtrlC);
+                },
                 KeyCode::CtrlQ => {
                     println!("Buffer content: {} \r\nQuitting...\r\n", self.buffers[0].lock().unwrap().dump_to_string());
-                    self.running = false;
+                    running = false;
                 },
                 KeyCode::Escaped(_esk) => {
                     // println!("Trying to move cursor...");
@@ -349,7 +380,17 @@ impl Editor {
                                 } else {
                                     self.views[self.current_view].view_cursor.col += 1;
                                 }
-                                self.views[self.current_view].update_cursor();
+                                let pos = self.buffers[0].lock().unwrap().get_absolute_cursor_pos();
+                                let linepos = self.buffers[0].lock().unwrap().get_line_number_editing();
+                                let WinDim(x, _y) = self.views[0].win_size;
+                                let cursor_output_pos = WinDim(x-12, 1);
+                                let WinDim(valx, valy) = cursor_output_pos;
+                                let vc_pos = ViewCursor {col: valx as usize, row: valy as usize};
+                                let vop = ViewOperations::ClearLineRest;
+                                print!("{}{}{};{}|{};{}", vc_pos, vop, pos, linepos, self.views[0].view_cursor.col, self.views[0].view_cursor.row);
+                                print!("{}", self.views[0].view_cursor);
+                                stdout().flush();
+                                // self.views[self.current_view].update_cursor();
                             }
                         },
                         EscapeKeyCode::Left => {
@@ -358,13 +399,24 @@ impl Editor {
                             if old_pos != pos {
                                 if pos.line_number < old_pos.line_number {
                                     self.views[self.current_view].view_cursor.row -= 1;
-                                    self.views[self.current_view].view_cursor.col = pos.get_line_position() + 1;
+                                    // self.views[self.current_view].view_cursor.col = pos.get_line_position() + 1;
+                                    self.views[self.current_view].view_cursor.col = pos.get_line_position();
                                 } else {
                                     if self.views[self.current_view].view_cursor.col > 1 {
                                         self.views[self.current_view].view_cursor.col -= 1;
                                     }
                                 }
-                                self.views[self.current_view].update_cursor();
+                                let pos = self.buffers[0].lock().unwrap().get_absolute_cursor_pos();
+                                let linepos = self.buffers[0].lock().unwrap().get_line_number_editing();
+                                let WinDim(x, _y) = self.views[0].win_size;
+                                let cursor_output_pos = WinDim(x-12, 1);
+                                let WinDim(valx, valy) = cursor_output_pos;
+                                let vc_pos = ViewCursor {col: valx as usize, row: valy as usize};
+                                let vop = ViewOperations::ClearLineRest;
+                                print!("{}{}{};{}|{};{}", vc_pos, vop, pos, linepos, self.views[0].view_cursor.col, self.views[0].view_cursor.row);
+                                print!("{}", self.views[0].view_cursor);
+                                stdout().flush();
+                                // self.views[self.current_view].update_cursor();
                             }
                         }
                         EscapeKeyCode::Up => {
@@ -378,7 +430,7 @@ impl Editor {
                 },
                 KeyCode::None => println!("Could not handle keypress!\r")
             }
-            self.views[self.current_view].draw_view();
+            // self.views[self.current_view].draw_view();
         }
     }
 
@@ -441,12 +493,14 @@ impl Editor {
             let input = match ch_buf[0] {
                 1 => KeyCode::CtrlA,
                 2 => KeyCode::CtrlB,
+                3 => KeyCode::CtrlC,
                 8 => KeyCode::CtrlBackspace,
                 9 => KeyCode::Tab,
                 13 => KeyCode::Enter,
                 15 => KeyCode::CtrlO,
                 17 => KeyCode::CtrlQ,
                 19 => KeyCode::CtrlS,
+                26 => KeyCode::CtrlZ,
                 27 => {
                     self.interpret_input_sequence()
                 },

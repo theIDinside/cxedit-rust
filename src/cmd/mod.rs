@@ -1,23 +1,27 @@
 pub mod command_engine;
 type OffsetAbsolute = usize;
 
+#[derive(Clone)]
 pub enum MoveDir {
     Previous,
     Next
 }
-
+#[derive(Clone)]
 pub enum MoveKind {
     Word(MoveDir),
     Line(MoveDir),
     Char(MoveDir)
 }
 // let words be something, and see where clion tabs
+#[derive(Clone)]
 pub enum Command {
     Move(MoveKind),
+    CommandInput,
     Jump,
     Find,
     Save,
-    Open
+    Open,
+    Quit
 }
 
 use self::Command::{Move, Jump, Find, Save, Open};
