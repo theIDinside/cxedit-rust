@@ -3,10 +3,11 @@
 extern crate libc;
 extern crate termios;
 use std::env::args;
-use std::fs::File;
 use std::path::Path;
 
 use cxedit::editor::editor::Editor;
+
+
 
 fn main() {
 

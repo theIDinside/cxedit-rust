@@ -1,5 +1,3 @@
-use std::hash::Hash;
-
 #[derive(Hash, Eq, PartialOrd, PartialEq, Clone)]
 pub enum KeyCode {
     CtrlBackspace,

@@ -15,8 +15,6 @@ use crate::data::FileResult;
 use crate::data::SaveFileError;
 use crate::editor::FileOpt;
 use std::error::Error;
-use std::thread::sleep;
-use std::time::Duration;
 
 pub enum ObjectKind {
     Word,
@@ -115,7 +113,7 @@ impl Cursor {
 
 pub struct Textbuffer {
     data: GapBuffer<char>,
-    scratch: Vec<String>,
+    _scratch: Vec<String>,
     observer: Option<Arc<View>>,
     cursor: TextPosition,
     dirty: bool,
@@ -130,7 +128,7 @@ impl Textbuffer {
         Textbuffer {
             cursor: tp,
             data: gb,
-            scratch: Vec::new(),
+            _scratch: Vec::new(),
             observer: None,
             dirty: false,
             line_count: 0,
@@ -149,6 +147,14 @@ impl Textbuffer {
             self.cursor = self.get_text_position_info(pos);
             self.data.set_gap_position(pos);
         }
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn set_pristine(&mut self) {
+        self.dirty = false;
     }
 
     pub fn find_range_of(&self, cursor: Cursor, kind: ObjectKind) -> (TextPosition, TextPosition) {
@@ -193,8 +199,9 @@ impl Textbuffer {
     }
 
     pub fn get_line_at_cursor(&self) -> String {
-        let line_begin_absolute = (0..self.data.get_pos()).into_iter().rposition(|idx| self.data[idx] == '\n').and_then(|pos| Some(pos + 1)).unwrap_or(0usize);
-        let line_end_absolute = (self.data.get_pos()..self.data.len()).into_iter().position(|idx| self.data[idx] == '\n').and_then(|pos| Some(pos + 1)).unwrap_or(self.data.len());
+        let len = self.len();
+        let line_begin_absolute = (0..self.data.get_pos()).into_iter().rposition(|idx| self.data[idx] == '\n').and_then(|pos| Some(pos+1)).unwrap_or(0usize);
+        let line_end_absolute = (self.data.get_pos()..self.data.len()).into_iter().position(|idx| self.data[idx] == '\n' || idx == len-1).and_then(|pos| Some(pos+1)).unwrap_or(self.data.len());
         self.data.read_string(line_begin_absolute..line_end_absolute)
     }
 
@@ -225,19 +232,48 @@ impl Textbuffer {
         tp
     }
 
+    pub fn get_line_end_abs(&self, line_number: usize) -> Option<TextPosition> {
+        let len = self.data.len();
+        let lines_endings: Vec<usize> =
+            (0..self.data.len())
+                .into_iter()
+                .filter(|idx| self.data[*idx] == '\n' || *idx == len-1)
+                .collect::<Vec<usize>>().into_iter().enumerate().take_while(|(index, _)| {
+                index <= &(line_number+1)
+            }).map(|(_, l)| {
+                l
+            }).collect();
+
+        if lines_endings.len() == line_number-1 && line_number -1 > 0 {
+            let linebegin = lines_endings[line_number-1]+1;
+            let line_end = (linebegin..self.data.len()).into_iter().rposition(|idx| self.data[idx] == '\n' || idx == len-1).unwrap_or(len);
+            return Some(TextPosition::from((line_end, linebegin, line_number-1)));
+        }
+
+        if line_number > lines_endings.len() && lines_endings.len() == 0 {
+            Some(TextPosition::from((self.data.len(), 0, 0)))
+        } else if line_number > lines_endings.len() {
+            let this_line_abs = lines_endings[lines_endings.len()-1]; // here it means, this value is self.data.len()
+            Some(TextPosition::from((self.data.len(), this_line_abs, lines_endings.len())))
+        } else if line_number == lines_endings.len() {
+            let this_line_abs = lines_endings[line_number-1]; // here it means, this value is self.data.len()
+            Some(TextPosition::from((self.data.len(), this_line_abs, lines_endings.len())))
+        } else {
+            let this_line_abs = lines_endings[line_number]; // here it means, this value is self.data.len()
+            Some(TextPosition::from((lines_endings[line_number+1], this_line_abs, lines_endings.len())))
+        }
+    }
 
     pub fn get_line_start_abs(&self, line_number: usize) -> Option<TextPosition> {
         let lines_endings: Vec<usize> =
             (0..self.data.len())
                 .into_iter()
                 .filter(|idx| self.data[*idx] == '\n')
-                .collect::<Vec<usize>>().into_iter().enumerate().take_while(|(index, lineno)| {
-                index <= &line_number
-            }).map(|(i, l)| {
+                .collect::<Vec<usize>>().into_iter().enumerate().take_while(|(index, _)| {
+                index <= &(line_number+1)
+            }).map(|(_, l)| {
                 l
             }).collect();
-        // lines_endings[line_number - 1] points to the character \n, we actually want the character position, after that, for us to "actually" be on the new line
-        // println!("Size: {}", lines_endings.len());
         if line_number > lines_endings.len() && lines_endings.len() == 0 {
             Some(TextPosition::from((self.len(), 0, 1)))
         } else if line_number > lines_endings.len() {
@@ -250,7 +286,9 @@ impl Textbuffer {
     }
 
     pub fn insert_data(&mut self, data: &str) {
+        self.data.set_gap_position(self.cursor.absolute);
         self.data.map_to(data.chars());
+        self.cursor.absolute += data.len();
     }
 
     pub fn get_absolute_cursor_pos(&self) -> usize {
@@ -343,11 +381,14 @@ impl Textbuffer {
         self.line_count = 0;
     }
 
-    pub fn delete(&mut self) {
+    pub fn delete(&mut self) -> Option<char> {
         if let Some(character) = self.data.delete() {
             if character == '\n' {
                 self.line_count -= 1;
             }
+            Some(character)
+        } else {
+            None
         }
     }
 
@@ -376,7 +417,7 @@ impl Textbuffer {
         let contents = read_content(p).unwrap();
         let mut tb = Textbuffer {
             data: GapBuffer::new_with_capacity(contents.len()),
-            scratch: vec![],
+            _scratch: vec![],
             observer: None,
             cursor: TextPosition::new(),
             line_count: contents.chars().filter(|c| *c == '\n').collect::<Vec<char>>().len(),

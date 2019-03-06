@@ -24,7 +24,7 @@ pub enum Command {
     Quit
 }
 
-use self::Command::{Move, Jump, Find, Save, Open};
+use self::Command::{Jump, Find, Save, Open};
 
 impl From<&Command> for &str {
     fn from(cmd: &Command) -> Self {

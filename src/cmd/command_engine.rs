@@ -1,13 +1,11 @@
-use crate::cmd::Command;
 use std::sync::{Arc, Mutex};
 use crate::data::text_buffer::Textbuffer;
-use std::sync::MutexGuard;
 use std::thread::sleep;
 use std::time::Duration;
 
 pub enum Action {
     Insert(usize, char),
-    InsertWord(usize, String),
+    InsertData(usize, String),
     Delete(usize, char),
     Remove(usize, char),
     Undo,
@@ -53,11 +51,11 @@ impl CommandEngine {
                 self.forward_history.clear();
                 ActionResult::OK
             },
-            Action::InsertWord(pos, data) => {
+            Action::InsertData(pos, data) => {
                 let mut guard = self.buffer_ref.lock().unwrap();
                 let bufpos = guard.get_textpos().absolute;
                 if *pos == bufpos {
-                    guard.insert_data(&data);
+                    guard.insert_data(data);
                 } else {
                     guard.set_textpos(*pos);
                     guard.insert_data(data);
@@ -65,14 +63,14 @@ impl CommandEngine {
                 self.history.push(action);
                 ActionResult::OK
             },
-            Action::Delete(pos, ch) => {
+            Action::Delete(pos, _) => {
                 let mut guard = self.buffer_ref.lock().unwrap();
                 let bufpos = guard.get_textpos().absolute;
                 if *pos == bufpos {
                     guard.delete();
                 } else {
                     guard.set_textpos(*pos);
-                    guard.delete()
+                    guard.delete();
                 }
                 self.history.push(action);
                 ActionResult::OK
@@ -83,9 +81,7 @@ impl CommandEngine {
                 guard.set_textpos(*pos);
                 let bufpos = guard.get_textpos().absolute;
                 if *pos == bufpos && *pos > 0 {
-                    if let Some(c) = guard.remove() {
-                        println!("\x1b[15;1H char to be removed: [{}], char that was removed: [{}]", ch, c);
-                    }
+                    guard.remove();
                     self.history.push(action);
                     ActionResult::OK
                 } else if *pos > 0 {
@@ -120,9 +116,9 @@ impl CommandEngine {
                                 guard.delete();
                             } else {
                                 guard.set_textpos(*pos);
-                                guard.delete()
+                                guard.delete();
                             }
-                            self.forward_history.push(Action::Delete(*pos, *ch));
+                            self.forward_history.push(Action::Remove(*pos, *ch));
                             self.history.pop();
                             ActionResult::OK
                         },
@@ -138,11 +134,30 @@ impl CommandEngine {
                             self.forward_history.push(Action::Insert(*pos, *ch));
                             self.history.pop();
                             ActionResult::OK
-                        }
+                        },
+                        Action::InsertData(pos, data) => {
+                            let mut guard = self.buffer_ref.lock().unwrap();
+                            let bufpos = guard.get_textpos().absolute;
+                            if *pos == bufpos {
+                                for i in 0..data.len() {
+                                    if let Some(ch) = guard.delete() {
+                                        self.forward_history.push(Action::Remove(*pos+i, ch));
+                                    }
+                                }
+                            } else {
+                                guard.set_textpos(*pos);
+                                for i in 0..data.len() {
+                                    if let Some(ch) = guard.delete() {
+                                        self.forward_history.push(Action::Remove(*pos+i, ch));
+                                    }
+                                }
+                            }
+                            self.history.pop();
+                            ActionResult::OK
+                        },
                         _ => {
-                            sleep(Duration::from_millis(2500));
                             unimplemented!("This is not implemented yet!!!");
-                            sleep(Duration::from_millis(500));
+                            sleep(Duration::from_millis(2500));
                             ActionResult::ERR
                         }
                     }

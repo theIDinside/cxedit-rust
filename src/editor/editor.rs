@@ -9,16 +9,13 @@ use libc::read as read;
 use std::io::{Write, stdout};
 use crate::cmd::{MoveKind, MoveDir, Command};
 use crate::editor::{view::ViewCursor, view::View};
-use self::StatlineCommand::{SaveFile, OpenFile};
-use crate::data::SaveFileError;
+use self::StatlineCommand::{SaveFile};
 use crate::editor::view::ViewOperations;
 use crate::cfg::Config;
 use crate::editor::key::{KeyCode, EscapeKeyCode};
 use crate::cmd::command_engine::CommandEngine;
 use crate::cmd::command_engine::Action;
 use crate::cmd::command_engine::ActionResult;
-use std::thread::sleep;
-use std::time::Duration;
 use crate::editor::view::WinDim;
 
 pub enum InputMode {
@@ -34,7 +31,7 @@ pub struct Editor {
     current_buffer: usize,
     running: bool,
     original_terminal_settings: Option<Termios>,
-    input_mode: InputMode,
+    _input_mode: InputMode,
     config: Config,
     c_e: CommandEngine
 }
@@ -69,7 +66,7 @@ impl Editor {
             current_view: 0,
             running: false,
             original_terminal_settings: None,
-            input_mode: InputMode::Insert,
+            _input_mode: InputMode::Insert,
             config: Config::default(),
             c_e: CommandEngine::new(Arc::new(Mutex::new(Textbuffer::new())))
         }
@@ -164,7 +161,7 @@ impl Editor {
                         },
                         Command::Find => unimplemented!(),
                         Command::Jump => unimplemented!(),
-                        Command::Move(mk) => unimplemented!(),
+                        Command::Move(_mk) => unimplemented!(),
                         Command::Quit => {
                             unimplemented!();
                         },
@@ -226,7 +223,7 @@ impl Editor {
                     let pos = *&self.buffers[0].lock().unwrap().get_textpos().absolute;
                     match self.c_e.execute(Action::Insert(pos, c)) {
                         ActionResult::OK => {
-                            self.views[self.current_view].write_character(c);
+                            self.views[self.current_view].draw_view();
                         },
                         ActionResult::ERR => {
 
@@ -234,31 +231,27 @@ impl Editor {
                     }
                     // self.buffers[0].lock().unwrap().insert_ch(c);
                 },
+                KeyCode::Enter => {
+                    let pos = *&self.buffers[0].lock().unwrap().get_textpos().absolute;
+                    match self.c_e.execute(Action::Insert(pos, '\n')) {
+                        ActionResult::OK => {
+                            self.views[0].draw_view();
+                        },
+                        ActionResult::ERR => {
+
+                        }
+                    }
+                },
                 KeyCode::Backspace => {
-                    let (line_number, pos) = {
+                    let pos = {
                         let guard = self.buffers[0].lock().unwrap();
-                        let line_number = guard.get_line_number_editing();
-                        let mut pos = guard.get_textpos().absolute;
-                        (line_number, pos)
+                        guard.get_textpos().absolute
                     };
                     if pos > 0 {
                         let c = self.buffers[0].lock().unwrap().get_at(pos-1).unwrap();
-                        println!("\x1b[15;1H char to be removed: [{}]", c);
                         match self.c_e.execute(Action::Remove(pos, c)) {
                             ActionResult::OK => {
-                            // self.views[self.current_view].write_character(c);
-                            // self.buffers[0].lock().unwrap().remove();
-                            let lineedit = self.buffers[0].lock().unwrap().get_line_number_editing();
-                            if lineedit < line_number {
-                                // TODO: Redraw entire screen, because removing a line, will alter positions of every line after it
-                                self.views[0].view_cursor.row -= 1;
-                                self.views[0].view_cursor.col = self.buffers[0].lock().unwrap().get_line_at_cursor().len();
-                                self.views[0].draw_view();
-                            } else {
-                                let line = self.buffers[0].lock().unwrap().get_line_at_cursor();
-                                self.views[0].view_cursor.col -= 1;
-                                self.views[0].update_with_line(&line);
-                            }
+                            self.views[0].draw_view();
                             },
                             ActionResult::ERR => {
 
@@ -267,14 +260,20 @@ impl Editor {
                     }
                 },
                 KeyCode::Tab => {
+                    let pos = *&self.buffers[0].lock().unwrap().get_textpos().absolute;
+                    match self.c_e.execute(Action::InsertData(pos, "    ".into())) {
+                        ActionResult::OK => {
+                            self.views[self.current_view].draw_view();
+                        },
+                        ActionResult::ERR => {
+
+                        }
+                    }
+                    /*
                     self.buffers[0].lock().unwrap().insert_data("    ");
                     for _ in 0..4 {
                         self.views[0].write_character(' ');
-                    }
-                },
-                KeyCode::Enter => {
-                    self.buffers[0].lock().unwrap().insert_ch('\n');
-                    self.views[self.current_view].write_character('\n');
+                    }*/
                 },
                 KeyCode::Esc => {},
                 KeyCode::CtrlBackspace => {},
@@ -300,6 +299,7 @@ impl Editor {
                     } else {
                         self.views[0].restore_statline();
                     }
+                    self.buffers[0].lock().unwrap().set_pristine();
                 },
                 KeyCode::CtrlO => {
                     self.views[self.current_view].on_open_file();
@@ -334,10 +334,8 @@ impl Editor {
                     }
                 },
                 KeyCode::CtrlZ => {
-                    let pos = *&self.buffers[0].lock().unwrap().get_textpos().absolute;
                     match self.c_e.execute(Action::Undo) {
                         ActionResult::OK => {
-                            // self.views[self.current_view].write_character(c);
                             self.views[0].draw_view();
                         },
                         ActionResult::ERR => {
@@ -357,24 +355,22 @@ impl Editor {
                     self.views[self.current_view].update_cursor();
                 },
                 KeyCode::CtrlB => {
-                    self.views[self.current_view].reset();
+                    self.views[self.current_view].draw_view();
                 },
                 KeyCode::CtrlC => {
-                    let command = self.config.get_binding(KeyCode::CtrlC);
+                    // TODO: this is how reading from our config will look like, so that the bindings can be customizable
+                    let _command: Option<&Command> = self.config.get_binding(KeyCode::CtrlC);
                 },
                 KeyCode::CtrlQ => {
-                    println!("Buffer content: {} \r\nQuitting...\r\n", self.buffers[0].lock().unwrap().dump_to_string());
                     running = false;
                 },
                 KeyCode::Escaped(_esk) => {
-                    // println!("Trying to move cursor...");
                     match _esk {
                         EscapeKeyCode::Right => {
                             let old_pos = self.buffers[self.current_buffer].lock().unwrap().get_textpos();
                             let pos = self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Char(MoveDir::Next)).unwrap();
                             if old_pos != pos {
                                 if pos.line_number > old_pos.line_number {
-                                    println!("Trying to move right...");
                                     self.views[self.current_view].view_cursor.row += 1;
                                     self.views[self.current_view].view_cursor.col = 1;
                                 } else {
@@ -394,31 +390,17 @@ impl Editor {
                             }
                         },
                         EscapeKeyCode::Left => {
-                            let old_pos = self.buffers[self.current_buffer].lock().unwrap().get_textpos();
                             let pos = self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Char(MoveDir::Previous)).unwrap();
-                            if old_pos != pos {
-                                if pos.line_number < old_pos.line_number {
-                                    self.views[self.current_view].view_cursor.row -= 1;
-                                    // self.views[self.current_view].view_cursor.col = pos.get_line_position() + 1;
-                                    self.views[self.current_view].view_cursor.col = pos.get_line_position();
-                                } else {
-                                    if self.views[self.current_view].view_cursor.col > 1 {
-                                        self.views[self.current_view].view_cursor.col -= 1;
-                                    }
-                                }
-                                let pos = self.buffers[0].lock().unwrap().get_absolute_cursor_pos();
-                                let linepos = self.buffers[0].lock().unwrap().get_line_number_editing();
+                                self.views[0].view_cursor = ViewCursor::from(pos.clone());
                                 let WinDim(x, _y) = self.views[0].win_size;
                                 let cursor_output_pos = WinDim(x-12, 1);
                                 let WinDim(valx, valy) = cursor_output_pos;
                                 let vc_pos = ViewCursor {col: valx as usize, row: valy as usize};
                                 let vop = ViewOperations::ClearLineRest;
-                                print!("{}{}{};{}|{};{}", vc_pos, vop, pos, linepos, self.views[0].view_cursor.col, self.views[0].view_cursor.row);
+                                print!("{}{}{};{}|{};{}", vc_pos, vop, pos.get_line_position(), &pos.line_number, self.views[0].view_cursor.col, self.views[0].view_cursor.row);
                                 print!("{}", self.views[0].view_cursor);
                                 stdout().flush();
-                                // self.views[self.current_view].update_cursor();
-                            }
-                        }
+                        },
                         EscapeKeyCode::Up => {
                             self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Line(MoveDir::Previous));
                         }

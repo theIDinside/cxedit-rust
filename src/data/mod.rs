@@ -1,7 +1,6 @@
 pub mod gap_buffer;
 pub mod text_buffer;
 use std::fmt::{Display, Formatter as Fmt, Error as FmtError};
-use std::error;
 use crate::data::SaveFileError::Other;
 
 

@@ -2,7 +2,6 @@
 use std::path::Path;
 use std::collections::HashMap;
 use crate::cmd::Command;
-use crate::cmd::Command::{CommandInput, Save, Open, Quit, Move, Jump, Find};
 use crate::editor::key::KeyCode;
 
 
@@ -25,7 +24,7 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn read_cfg(file: &Path) {
+    pub fn read_cfg(_file: &Path) {
 
     }
 

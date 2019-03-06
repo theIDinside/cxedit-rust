@@ -15,9 +15,6 @@ use std::io::stdout;
 use std::io::Write;
 
 use crate::editor::color::{SetColor, Color};
-use crate::editor::view::ViewOperations::ClearLineRest;
-use std::thread::sleep;
-use std::time::Duration;
 
 #[derive(Debug)]
 pub struct WinDim(pub u16, pub u16);
@@ -343,7 +340,7 @@ impl View {
         let empty_space = self.win_size.0 as usize - data.len();
         let mut vc = self.view_cursor;
         vc.col = 1;
-        print!("{}{}{}{}{}", vc, ViewOperations::ClearLineRest.as_output(), self.view_cfg.fg_color, self.view_cfg.bg_color, &data.chars().chain(" ".repeat(empty_space as usize).chars()).collect::<String>());
+        print!("{}{}{}{}{}", vc, ViewOperations::ClearLineRest, self.view_cfg.fg_color, self.view_cfg.bg_color, &data.chars().chain(" ".repeat(empty_space as usize).chars()).collect::<String>());
         stdout().flush();
     }
 
@@ -389,14 +386,14 @@ impl View {
     }
 
     pub fn draw_view(&mut self) {
-        let tmp = self.view_cursor;
-        let abs_begin = self.top_line.absolute;
+        let abs_begin = self.top_line.absolute; // and "anchor" into the buffer, so that we know where the top line of the view -> buffer is
         let line_count = self.win_size.1 - 1;
         let d = {
             let guard = self.buffer_ref.lock().unwrap();
-            let line_at = guard.get_line_start_abs(line_count as usize - 1usize).unwrap().absolute;
-            let buflen = guard.len();
-            let d = guard.get_data_range(abs_begin, line_at);
+            let line_end_abs = guard.get_line_end_abs(line_count as usize).unwrap().absolute;
+            let d = guard.get_data_range(abs_begin, line_end_abs);
+            //println!("Data range: \x1b[10;10{}", &d);
+            //sleep(Duration::from_millis(1500));
             let esc = 27u8;
             print!("{}[2J{}[1;1H", esc as char, esc as char);
             let mut a = " ".repeat(self.win_size.0 as usize);
@@ -422,7 +419,8 @@ impl View {
         for c in d.chars() {
             self.write_character(c);
         }
-        self.view_cursor = tmp;
+        self.view_cursor = ViewCursor::from(self.buffer_ref.lock().unwrap().get_textpos());
+        print!("{}", self.view_cursor);
         stdout().flush();
         /* TODO: get data from buffer in the range of top_line .. (top_line + (winsize.x * winsize.y)
             scan content, for new lines, and filter out any newlines that won't fit on screen

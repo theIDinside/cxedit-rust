@@ -294,6 +294,9 @@ impl BufferString for GapBuffer<char> {
                     Some(c) => tmpbuf.push(*c),
                     _ => {}
                 }
+                if i == self.len() {
+                    return tmpbuf;
+                }
             }
             tmpbuf
         };
