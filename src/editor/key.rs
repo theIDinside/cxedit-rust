@@ -4,7 +4,9 @@ pub enum KeyCode {
     CtrlA,
     CtrlB,
     CtrlC,
+    CtrlG,
     CtrlS,
+    CtrlV,
     CtrlO,
     CtrlQ,
     CtrlZ,
@@ -20,13 +22,18 @@ pub enum KeyCode {
 impl KeyCode {
     pub fn to_idx(&self) -> usize {
         match self {
-            KeyCode::CtrlA => 1,
-            KeyCode::CtrlB => 2,
-            KeyCode::CtrlC => 3,
-            KeyCode::CtrlS => 19,
-            KeyCode::CtrlO => 15,
-            KeyCode::CtrlQ => 17,
-            KeyCode::CtrlZ => 26,
+            KeyCode::CtrlA=> 1,
+            KeyCode::CtrlB=> 2,
+            KeyCode::CtrlC=> 3,
+            KeyCode::CtrlG=> 7,
+            KeyCode::CtrlBackspace=> 8,
+            KeyCode::Tab=> 9,
+            KeyCode::Enter =>13,
+            KeyCode::CtrlO =>15,
+            KeyCode::CtrlQ =>17,
+            KeyCode::CtrlS =>19,
+            KeyCode::CtrlV =>22,
+            KeyCode::CtrlZ =>26,
             _ => 0
         }
     }

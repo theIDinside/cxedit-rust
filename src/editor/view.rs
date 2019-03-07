@@ -146,7 +146,7 @@ pub struct ViewCursor {
 impl From<TextPosition> for ViewCursor {
     fn from(tp: TextPosition) -> Self {
         ViewCursor {
-            row: tp.line_number + 1,
+            row: tp.line_index + 1,
             col: tp.get_line_position() + 1
         }
     }
@@ -187,18 +187,6 @@ pub struct View {
 }
 
 impl View {
-
-    pub fn correct_view_cursor(&mut self) {
-        if self.view_cursor.row > self.line_range.end {
-            let diff = self.view_cursor.row - self.line_range.end;
-            self.view_cursor.row -= diff;
-        } else if self.view_cursor.row < self.line_range.start {
-            let diff = self.line_range.start - self.view_cursor.row;
-            self.view_cursor.row += diff;
-        }
-        self.view_cursor.row -= self.line_range.start;
-    }
-
     pub fn new() -> Option<Self> {
         let mut v = View {
             view_cursor: ViewCursor{ row: 1, col: 1},
@@ -278,17 +266,31 @@ impl View {
         }
     }
 
+
+    pub fn on_goto(&mut self) {
+        let goto_title = "[goto]: ";
+        self.statline_view_cursor.col = goto_title.len() + 1;
+        print!("{}{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, goto_title, ViewOperations::ClearLineRest);
+        stdout().flush();
+    }
+
     pub fn on_open_file(&mut self) {
         let open_title = "[open]: ";
         self.statline_view_cursor.col = open_title.len() + 1;
-        print!("{}{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, open_title, ViewOperations::ClearLineRest.as_output());
+        print!("{}{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, open_title, ViewOperations::ClearLineRest);
         stdout().flush();
+    }
+
+    pub fn statline_error_msg(&mut self, msg: &str) {
+        let error_title = "[error]: ";
+        self.statline_view_cursor.col = error_title.len() + 1;
+        print!("{}{}{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, ViewOperations::ClearLineRest, error_title, msg);
     }
 
     pub fn on_save_file(&mut self) {
         let open_title = "[save]: ";
         self.statline_view_cursor.col = open_title.len() + 1;
-        print!("{}{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, open_title, ViewOperations::ClearLineRest.as_output());
+        print!("{}{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, open_title, ViewOperations::ClearLineRest);
         stdout().flush();
     }
 
@@ -391,15 +393,6 @@ impl View {
 
         }
     }
-
-    pub fn scroll_down(&mut self) {
-        let begin = self.line_range.start;
-        let end = self.line_range.end;
-        self.line_range = (begin + 1)..(end + 1);
-        self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.start).unwrap();
-        let bottom_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.end).unwrap();
-    }
-
     // using the Rc<RefCell> is needed for being able to register with the text buffer, this view is watching.
     // It is kind of annoying, since the only thing we ever mutate, is the actual observer/listener at the buffer.
     // A view, never, _never_ mutates the buffer data.
@@ -411,10 +404,50 @@ impl View {
         print!("{}", self.view_cursor);
     }
 
+    pub fn scroll_down(&mut self) {
+        let begin = self.line_range.start;
+        let end = self.line_range.end;
+        self.line_range = (begin + 1)..(end + 1);
+        self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.start).unwrap();
+        let bottom_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.end).unwrap();
+    }
+
+    pub fn scroll_x_up(&mut self, steps: usize) {
+        let begin = self.line_range.start;
+        let end = self.line_range.end;
+        self.line_range = (begin - steps)..(end - steps);
+        self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.start).unwrap();
+        let bottom_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.end).unwrap();
+    }
+
+    pub fn scroll_x_down(&mut self, steps: usize) {
+        let begin = self.line_range.start;
+        let end = self.line_range.end;
+        self.line_range = (begin + steps)..(end + steps);
+        self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.start).unwrap();
+        let bottom_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.end).unwrap();
+    }
+
+    pub fn correct_view_cursor(&mut self) {
+        if self.view_cursor.row > self.line_range.end {
+            let diff = self.view_cursor.row - self.line_range.end;
+            self.view_cursor.row -= diff;
+        } else if self.view_cursor.row < self.line_range.start {
+            let diff = self.line_range.start - self.view_cursor.row;
+            self.view_cursor.row += diff;
+        }
+        self.view_cursor.row -= self.line_range.start;
+    }
+
     pub fn draw_view(&mut self) {
 
-        if self.view_cursor.row >= self.win_size.1 as usize - 1 {
-            self.scroll_down();
+        if self.view_cursor.row >= self.win_size.1 as usize - 2 {
+            let diff = (self.view_cursor.row - (self.win_size.1 as usize - 2));
+            self.scroll_x_down(diff);
+            self.correct_view_cursor();
+        } else if self.view_cursor.row < self.line_range.start {
+            let diff = (self.line_range.start - self.view_cursor.row);
+            self.scroll_x_up(diff);
             self.correct_view_cursor();
         }
 
@@ -422,7 +455,7 @@ impl View {
         let line_count = self.win_size.1 - 1;
         let d = {
             let guard = self.buffer_ref.lock().unwrap();
-            let line_end_abs = guard.get_line_end_abs(self.top_line.line_number+line_count as usize-3).unwrap().absolute;
+            let line_end_abs = guard.get_line_end_abs(self.top_line.line_index +line_count as usize-3).unwrap().absolute;
             let d = guard.get_data_range(abs_begin, line_end_abs);
             let esc = 27u8;
             print!("{}[2J{}[1;1H", esc as char, esc as char);

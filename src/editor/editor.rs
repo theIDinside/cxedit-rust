@@ -61,7 +61,8 @@ impl Drop for Editor {
 #[derive(Clone)]
 pub enum StatlineCommand {
     OpenFile(Option<String>),
-    SaveFile(Option<String>)
+    SaveFile(Option<String>),
+    Goto(Option<usize>)
 }
 
 impl Editor {
@@ -169,7 +170,9 @@ impl Editor {
                             Some(StatlineCommand::SaveFile(Some(input.clone())))
                         },
                         Command::Find => unimplemented!(),
-                        Command::Jump => unimplemented!(),
+                        Command::Jump => {
+                            Some(StatlineCommand::Goto(Some(input.parse::<usize>().unwrap_or(0usize))))
+                        },
                         Command::Move(_mk) => unimplemented!(),
                         Command::Quit => {
                             unimplemented!();
@@ -217,6 +220,10 @@ impl Editor {
 
     pub fn get_view(&mut self) -> &mut View {
         &mut self.views[self.current_view]
+    }
+
+    pub fn statline_error_msg(&self, msg: &str) {
+
     }
 
     // TODO: split up run function, to remove the intense complexity and spaghettization of code
@@ -286,6 +293,19 @@ impl Editor {
                 },
                 KeyCode::Esc => {},
                 KeyCode::CtrlBackspace => {},
+                KeyCode::CtrlG => {
+                    self.views[self.current_view].on_goto();
+                    let cmd = self.statline_input(Command::Jump);
+                    if let Some(StatlineCommand::Goto(Some(line))) = cmd {
+                        let line_pos = self.buffers[0].lock().unwrap().get_line_abs_index(line);
+                        self.buffers[0].lock().unwrap().set_textpos(line_pos.clone().unwrap().absolute);
+                        self.views[0].view_cursor = ViewCursor::from(line_pos.unwrap());
+                        self.views[0].draw_view();
+                    } else {
+                        self.statline_error_msg("Input could not be parsed to a number");
+                    }
+                },
+                KeyCode::CtrlV => {},
                 KeyCode::CtrlS => {
                     /* TODO: open status line if we do not have a filename, write in filename
                             validate provided path, open a new file with that name -> write contents.
@@ -356,7 +376,7 @@ impl Editor {
                     // N.B! This is a debug function ONLY. Used in the beginning for testing display functions, cursor navigation etc
                     // This will become something else entirely.
                     let tp = self.buffers[self.current_buffer].lock().unwrap().get_textpos();
-                    print!("Text buffer position: absolute: {}, line_start_absolute: {}, line_number: {}, line column position: {}\r\n", tp.absolute, tp.line_start_absolute, tp.line_number, tp.get_line_position());
+                    print!("Text buffer position: absolute: {}, line_start_absolute: {}, line_number: {}, line column position: {}\r\n", tp.absolute, tp.line_start_absolute, tp.line_index, tp.get_line_position());
                     print!("Text buffer get line at buffer cursor: {}\r\n", self.buffers[self.current_buffer].lock().unwrap().get_line_number());
                     print!("View cursor position: {},{}", self.views[self.current_view].view_cursor.col, self.views[self.current_view].view_cursor.row);
                     stdout().flush();
@@ -379,7 +399,7 @@ impl Editor {
                             let old_pos = self.buffers[self.current_buffer].lock().unwrap().get_textpos();
                             let pos = self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Char(MoveDir::Next)).unwrap();
                             if old_pos != pos {
-                                if pos.line_number > old_pos.line_number {
+                                if pos.line_index > old_pos.line_index {
                                     self.views[self.current_view].view_cursor.row += 1;
                                     self.views[self.current_view].view_cursor.col = 1;
                                 } else {
@@ -405,7 +425,7 @@ impl Editor {
                                 let WinDim(valx, valy) = cursor_output_pos;
                                 let vc_pos = ViewCursor {col: valx as usize, row: valy as usize};
                                 let vop = ViewOperations::ClearLineRest;
-                                print!("{}{}{};{}|{};{}{}", vc_pos, vop, pos.get_line_position(), &pos.line_number, self.views[0].view_cursor.col, self.views[0].view_cursor.row, self.views[0].view_cursor);
+                                print!("{}{}{};{}|{};{}{}", vc_pos, vop, pos.get_line_position(), &pos.line_index, self.views[0].view_cursor.col, self.views[0].view_cursor.row, self.views[0].view_cursor);
                                 stdout().flush();
                         },
                         EscapeKeyCode::Up => {
@@ -486,12 +506,14 @@ impl Editor {
                 1 => KeyCode::CtrlA,
                 2 => KeyCode::CtrlB,
                 3 => KeyCode::CtrlC,
+                7 => KeyCode::CtrlG,
                 8 => KeyCode::CtrlBackspace,
                 9 => KeyCode::Tab,
                 13 => KeyCode::Enter,
                 15 => KeyCode::CtrlO,
                 17 => KeyCode::CtrlQ,
                 19 => KeyCode::CtrlS,
+                22 => KeyCode::CtrlV,
                 26 => KeyCode::CtrlZ,
                 27 => {
                     self.interpret_input_sequence()

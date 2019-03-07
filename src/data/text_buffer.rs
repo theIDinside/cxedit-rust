@@ -42,7 +42,7 @@ pub enum TextObject {
 pub struct TextPosition {
     pub absolute: usize,
     pub line_start_absolute: usize,
-    pub line_number: usize
+    pub line_index: usize
 }
 
 impl Ord for TextPosition {
@@ -72,7 +72,7 @@ impl TextPosition {
         TextPosition {
             absolute: 0,
             line_start_absolute: 0,
-            line_number: 0
+            line_index: 0
         }
     }
 
@@ -83,6 +83,10 @@ impl TextPosition {
     pub fn get_line_position(&self) -> usize {
         self.absolute - self.line_start_absolute
     }
+
+    pub fn get_line_number(&self) -> usize {
+        self.line_index + 1
+    }
 }
 
 impl From<(usize, usize, usize)> for TextPosition {
@@ -90,7 +94,7 @@ impl From<(usize, usize, usize)> for TextPosition {
         TextPosition {
             absolute,
             line_start_absolute,
-            line_number
+            line_index: line_number
         }
     }
 }
@@ -100,7 +104,7 @@ impl Default for TextPosition {
         TextPosition {
             absolute: 0,
             line_start_absolute: 0,
-            line_number: 0
+            line_index: 0
         }
     }
 }
@@ -116,7 +120,7 @@ impl Cursor {
         match self {
             Cursor::Absolute(pos) => {
                 let text_pos = tb.get_text_position_info(*pos);
-                (pos - text_pos.line_start_absolute, text_pos.line_number)
+                (pos - text_pos.line_start_absolute, text_pos.line_index)
             },
             _ => {
                 (0, 0)
@@ -235,7 +239,7 @@ impl Textbuffer {
     }
 
     pub fn get_line_number_editing(&self) -> usize {
-        self.cursor.line_number
+        self.cursor.line_index
     }
 
     pub fn get_text_position_info(&self, pos: usize) -> TextPosition {
@@ -243,7 +247,7 @@ impl Textbuffer {
         let lv: Vec<char> = (0..pos).into_iter().rev().filter(|i| self.data[*i] == '\n').map(|i| self.data[i]).collect();
         let lineno = lv.len();
         tp.line_start_absolute = (0..pos).into_iter().rposition(|i| self.data[i] == '\n').and_then(|pos| Some(pos + 1)).unwrap_or(0usize);
-        tp.line_number = lineno;
+        tp.line_index = lineno;
         tp.absolute = pos;
         tp
     }
@@ -307,6 +311,16 @@ impl Textbuffer {
         }
     }
 
+    pub fn get_line_abs_index(&self, line_number: usize) -> Option<TextPosition> {
+        let lines: Vec<usize> =
+            (0..self.len())
+                .into_iter()
+                .filter(|&index| index == 0 || self.data[index] == '\n')
+                .collect();
+        let line_pos = lines.get(line_number-1).and_then(|&value| Some(value+1)).unwrap_or(0usize);
+        Some(TextPosition::from((line_pos, line_pos, line_number-1)))
+    }
+
     pub fn get_line_start_abs(&self, line_number: usize) -> Option<TextPosition> {
         let lines_endings: Vec<usize> =
             (0..self.data.len())
@@ -368,7 +382,7 @@ impl Textbuffer {
                             if let Some(ch) = self.data.get(self.cursor.absolute-1) {
                                 if *ch == '\n' {
                                     self.cursor.line_start_absolute = self.cursor.absolute;
-                                    self.cursor.line_number += 1;
+                                    self.cursor.line_index += 1;
                                 }
                             }
                         }
@@ -389,10 +403,10 @@ impl Textbuffer {
 
                     },
                     Next => {
-                        if self.cursor.absolute < self.len() && (self.cursor.line_number + 1) < self.line_count {
+                        if self.cursor.absolute < self.len() && (self.cursor.line_index + 1) < self.line_count {
                             if let Some(next_line_start) = self.find_next_line_abs_offset(self.cursor.absolute) {
                                 let column_pos = self.cursor.get_line_position();
-                                self.cursor.line_number += 1;
+                                self.cursor.line_index += 1;
                                 self.cursor.line_start_absolute = next_line_start;
                                 let end = self.find_next_line_abs_offset(next_line_start).and_then(|val| Some(val-1)).unwrap_or(self.len());
                                 let line_len = end - next_line_start;
@@ -465,16 +479,13 @@ impl Textbuffer {
 
     pub fn line_from_buffer_index(&self, absolute: usize) -> Option<TextPosition> {
         let safe_pos_value = std::cmp::min(absolute, self.data.len());
-        let line_begin: Vec<usize> = (0..safe_pos_value + 1).rposition(|index| index == 0 || self.data[index] == '\n').collect();
-        if line_begin.is_empty() {
-            None
-        } else {
-            let mut tp = TextPosition::new();
-            tp.line_start_absolute = *line_begin.first().unwrap();
-            tp.line_number = line_begin.len() - 1;
-            tp.absolute = absolute;
-            Some(tp)
-        }
+        let line_begin = (0..safe_pos_value).rposition(|index| index == 0 || self.data[index] == '\n').and_then(|v| Some(v+1)).unwrap_or(0usize);
+        let line_numbers = (0..safe_pos_value).rev().filter(|&index| index == 0 || self.data[index] == '\n').collect::<Vec<usize>>();
+        let mut tp = TextPosition::new();
+        tp.line_start_absolute = line_begin;
+        tp.line_index = line_numbers.len() - 1;
+        tp.absolute = absolute;
+        Some(tp)
     }
 
     pub fn register_view(&mut self, v: Arc<View>) {
