@@ -15,6 +15,9 @@ use std::io::stdout;
 use std::io::Write;
 
 use crate::editor::color::{SetColor, Color};
+use std::thread::sleep;
+use std::time::Duration;
+use crate::editor::editor::debug_sleep;
 
 #[derive(Debug)]
 pub struct WinDim(pub u16, pub u16);
@@ -134,7 +137,7 @@ impl Default for ViewConfig {
     }
 }
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 pub struct ViewCursor {
     pub row: usize,
     pub col: usize
@@ -155,11 +158,6 @@ impl Default for ViewCursor {
     }
 }
 
-impl Clone for ViewCursor {
-    fn clone(&self) -> Self {
-        ViewCursor { row: self.row, col: self.col }
-    }
-}
 
 impl Display for ViewCursor {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
@@ -190,6 +188,17 @@ pub struct View {
 
 impl View {
 
+    pub fn correct_view_cursor(&mut self) {
+        if self.view_cursor.row > self.line_range.end {
+            let diff = self.view_cursor.row - self.line_range.end;
+            self.view_cursor.row -= diff;
+        } else if self.view_cursor.row < self.line_range.start {
+            let diff = self.line_range.start - self.view_cursor.row;
+            self.view_cursor.row += diff;
+        }
+        self.view_cursor.row -= self.line_range.start;
+    }
+
     pub fn new() -> Option<Self> {
         let mut v = View {
             view_cursor: ViewCursor{ row: 1, col: 1},
@@ -207,10 +216,15 @@ impl View {
             v.win_size = WinDim::from(winsize);
             v.status_line_position.row = v.win_size.1 as usize;
             v.statline_view_cursor = v.status_line_position;
+            v.line_range = 0..(v.win_size.1 as usize -1);
             Some(v)
         } else {
             None
         }
+    }
+
+    pub fn get_text_area_height(&self) -> usize {
+        self.win_size.1 as usize - 1
     }
 
     pub fn init(&mut self) {
@@ -350,8 +364,7 @@ impl View {
         let WinDim(valx, valy) = cursor_output_pos;
         let vc_pos = ViewCursor {col: valx as usize, row: valy as usize};
         let vop = ViewOperations::ClearLineRest;
-        print!("{}{}{};{}", vc_pos, vop.as_output(), self.view_cursor.col, self.view_cursor.row);
-        print!("{}", self.view_cursor);
+        print!("{}{}{};{}{}", vc_pos, vop.as_output(), self.view_cursor.col, self.view_cursor.row, self.view_cursor);
         stdout().flush();
     }
 
@@ -360,22 +373,31 @@ impl View {
         self.buffer_ref = bufref;
     }
 
-    pub fn move_right(&mut self, _steps: usize) {
+    pub fn move_right(&mut self) {
+
         unimplemented!()
     }
 
-    pub fn move_left(&mut self, _steps: usize) {
+    pub fn move_left(&mut self) {
         unimplemented!()
     }
 
-    pub fn move_up(&mut self, _steps: usize) {
+    pub fn move_up(&mut self) {
         unimplemented!()
     }
 
-    pub fn move_down(&mut self, _steps: usize) {
-        let begin = self.line_range.start + 1;
-        let end = self.line_range.end + 1;
-        self.line_range = begin .. end;
+    pub fn move_down(&mut self) {
+        if self.view_cursor.row == self.line_range.end {
+
+        }
+    }
+
+    pub fn scroll_down(&mut self) {
+        let begin = self.line_range.start;
+        let end = self.line_range.end;
+        self.line_range = (begin + 1)..(end + 1);
+        self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.start).unwrap();
+        let bottom_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.end).unwrap();
     }
 
     // using the Rc<RefCell> is needed for being able to register with the text buffer, this view is watching.
@@ -385,21 +407,29 @@ impl View {
 
     }
 
+    pub fn draw_cursor(&self) {
+        print!("{}", self.view_cursor);
+    }
+
     pub fn draw_view(&mut self) {
-        let abs_begin = self.top_line.absolute; // and "anchor" into the buffer, so that we know where the top line of the view -> buffer is
+
+        if self.view_cursor.row >= self.win_size.1 as usize - 1 {
+            self.scroll_down();
+            self.correct_view_cursor();
+        }
+
+        let abs_begin = self.top_line.line_start_absolute; // and "anchor" into the buffer, so that we know where the top line of the view -> buffer is
         let line_count = self.win_size.1 - 1;
         let d = {
             let guard = self.buffer_ref.lock().unwrap();
-            let line_end_abs = guard.get_line_end_abs(line_count as usize).unwrap().absolute;
+            let line_end_abs = guard.get_line_end_abs(self.top_line.line_number+line_count as usize-3).unwrap().absolute;
             let d = guard.get_data_range(abs_begin, line_end_abs);
-            //println!("Data range: \x1b[10;10{}", &d);
-            //sleep(Duration::from_millis(1500));
             let esc = 27u8;
             print!("{}[2J{}[1;1H", esc as char, esc as char);
             let mut a = " ".repeat(self.win_size.0 as usize);
             a.push('\n');
             a.push('\r');
-            let res = a.repeat(self.win_size.1 as usize - 1);
+            let res = a.repeat(self.win_size.1 as usize);
             let mut status = " ".repeat(self.win_size.0 as usize);
             let status_title = "[status]: ";
             self.statline_view_cursor.col = status_title.len() + 1;

@@ -17,6 +17,13 @@ use crate::cmd::command_engine::CommandEngine;
 use crate::cmd::command_engine::Action;
 use crate::cmd::command_engine::ActionResult;
 use crate::editor::view::WinDim;
+use std::thread::sleep;
+use std::time::Duration;
+
+pub fn debug_sleep(msg: Option<String>, val: Option<u64>) {
+    println!("\x1b[25;10H{}", msg.unwrap_or(" ".into()));
+    sleep(Duration::from_millis(val.unwrap_or(1500)));
+}
 
 pub enum InputMode {
     Insert,
@@ -101,6 +108,8 @@ impl Editor {
                         }
                         lindex < lines_to_print
                     }).collect::<String>();
+                    let line_count: usize = data.chars().filter(|c| *c == '\n').collect::<Vec<char>>().len() + 1;
+                    self.buffers[0].lock().unwrap().line_count = line_count;
                     self.views[self.current_view].init();
                     d_to_print.chars().for_each(|c| {
                         self.views[self.current_view].write_character(c);
@@ -383,8 +392,7 @@ impl Editor {
                                 let WinDim(valx, valy) = cursor_output_pos;
                                 let vc_pos = ViewCursor {col: valx as usize, row: valy as usize};
                                 let vop = ViewOperations::ClearLineRest;
-                                print!("{}{}{};{}|{};{}", vc_pos, vop, pos, linepos, self.views[0].view_cursor.col, self.views[0].view_cursor.row);
-                                print!("{}", self.views[0].view_cursor);
+                                print!("{}{}{};{}|{};{}{}", vc_pos, vop, pos, linepos, self.views[0].view_cursor.col, self.views[0].view_cursor.row, self.views[0].view_cursor);
                                 stdout().flush();
                                 // self.views[self.current_view].update_cursor();
                             }
@@ -397,15 +405,17 @@ impl Editor {
                                 let WinDim(valx, valy) = cursor_output_pos;
                                 let vc_pos = ViewCursor {col: valx as usize, row: valy as usize};
                                 let vop = ViewOperations::ClearLineRest;
-                                print!("{}{}{};{}|{};{}", vc_pos, vop, pos.get_line_position(), &pos.line_number, self.views[0].view_cursor.col, self.views[0].view_cursor.row);
-                                print!("{}", self.views[0].view_cursor);
+                                print!("{}{}{};{}|{};{}{}", vc_pos, vop, pos.get_line_position(), &pos.line_number, self.views[0].view_cursor.col, self.views[0].view_cursor.row, self.views[0].view_cursor);
                                 stdout().flush();
                         },
                         EscapeKeyCode::Up => {
                             self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Line(MoveDir::Previous));
                         }
                         EscapeKeyCode::Down => {
-                            self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Line(MoveDir::Next));
+                            // self.buffers[self.current_buffer].lock().unwrap().move_cursor();
+                            let new_pos = self.buffers[0].lock().unwrap().move_cursor(MoveKind::Line(MoveDir::Next)).unwrap();
+                            self.views[0].view_cursor = ViewCursor::from(new_pos.clone());
+                            self.views[0].draw_view();
                         }
                     }
                     // print!("{}", _esk.output());stdout().lock().flush();

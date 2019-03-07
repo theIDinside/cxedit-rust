@@ -15,6 +15,10 @@ use crate::data::FileResult;
 use crate::data::SaveFileError;
 use crate::editor::FileOpt;
 use std::error::Error;
+use std::thread::sleep;
+use std::time::Duration;
+use std::thread::current;
+use crate::editor::editor::debug_sleep;
 
 pub enum ObjectKind {
     Word,
@@ -91,6 +95,16 @@ impl From<(usize, usize, usize)> for TextPosition {
     }
 }
 
+impl Default for TextPosition {
+    fn default() -> Self {
+        TextPosition {
+            absolute: 0,
+            line_start_absolute: 0,
+            line_number: 0
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum Cursor {
     Absolute(usize),
@@ -117,7 +131,7 @@ pub struct Textbuffer {
     observer: Option<Arc<View>>,
     cursor: TextPosition,
     dirty: bool,
-    line_count: usize
+    pub line_count: usize
 }
 
 impl Textbuffer {
@@ -131,7 +145,7 @@ impl Textbuffer {
             _scratch: Vec::new(),
             observer: None,
             dirty: false,
-            line_count: 0,
+            line_count: 1,
         }
     }
 
@@ -206,16 +220,18 @@ impl Textbuffer {
     }
 
     pub fn get_data_range(&self, begin: usize, end: usize) -> String {
-        if end > self.len() {
+        /*if end > self.len() {
+            print ln!("Index out of bounds!");
+            sleep(Duration::from_millis(1500));
             panic!("Index out of bounds!")
         } else {
+        }*/
             self.data.read_string(begin..end)
-        }
     }
 
     pub fn get_line_number(&self) -> usize {
-        let lv1: Vec<char> = (0..self.data.get_pos()).into_iter().rev().filter(|idx| self.data[*idx] == '\n').map(|i| self.data[i]).collect();
-        lv1.len() + 1
+        let lv1: Vec<usize> = (0..self.data.get_pos()).into_iter().rev().filter(|idx| self.data[*idx] == '\n').collect();
+        lv1.len()
     }
 
     pub fn get_line_number_editing(&self) -> usize {
@@ -230,6 +246,33 @@ impl Textbuffer {
         tp.line_number = lineno;
         tp.absolute = pos;
         tp
+    }
+
+    /**
+    * The line number is 0-indexed. When converting a line in the text document, to a line on screen,
+    * for writing characters to screen, use ViewCursor::from(&TextPosition) to convert to proper
+    * terminal row/cell indexing. (which uses a 1,1 index).
+    */
+    pub fn get_line_end_pos(&self, line: usize) -> Option<TextPosition> {
+        let buf_len = self.len();
+        if buf_len == 0 {
+            return Some(TextPosition::default());
+        }
+        let mut line_counter = 0;
+
+        let nlcp = (0..self.data.len()).into_iter().take_while(|index| {
+            if self.data[*index] == '\n' {
+                line_counter += 1;
+            }
+            line_counter < line+1
+        }).collect::<Vec<usize>>().into_iter().filter(|i| self.data[*i] == '\n').collect::<Vec<usize>>();
+        line_counter = 0;
+        let line_end = *nlcp.last().unwrap_or(&buf_len);
+        let line_begin =
+            (0..line_end).into_iter()
+                .rposition(|i| self.data[i] == '\n').and_then(|v| Some(v+1)).unwrap_or(0usize);
+        // println!("\x1b[25;10H Line begin: {} End: {}: #{}", line_begin, line_end, line);
+        Some(TextPosition::from((line_end, line_begin, nlcp.len())))
     }
 
     pub fn get_line_end_abs(&self, line_number: usize) -> Option<TextPosition> {
@@ -270,15 +313,15 @@ impl Textbuffer {
                 .into_iter()
                 .filter(|idx| self.data[*idx] == '\n')
                 .collect::<Vec<usize>>().into_iter().enumerate().take_while(|(index, _)| {
-                index <= &(line_number+1)
+                index <= &(line_number)
             }).map(|(_, l)| {
                 l
             }).collect();
         if line_number > lines_endings.len() && lines_endings.len() == 0 {
-            Some(TextPosition::from((self.len(), 0, 1)))
-        } else if line_number > lines_endings.len() {
-            let this_line_abs = lines_endings[lines_endings.len()-1] + 1;
-            Some(TextPosition::from((this_line_abs, this_line_abs, lines_endings.len())))
+            Some(TextPosition::from((self.len(), 0, 0)))
+        } else if line_number >= lines_endings.len() {
+            let this_line_abs = lines_endings.last().and_then(|v| Some(v+1)).unwrap_or(0);
+            Some(TextPosition::from((this_line_abs, this_line_abs, lines_endings.len()-1)))
         } else {
             let this_line_abs = lines_endings[lines_endings.len()-1] + 1;
             Some(TextPosition::from((this_line_abs, this_line_abs, line_number)))
@@ -315,8 +358,7 @@ impl Textbuffer {
                 match dir {
                     Previous => {
                         if self.cursor.absolute > 0 {
-                            self.cursor = self.get_text_position_info(self.data.get_pos()-1);
-                            self.set_textpos(self.cursor.absolute);
+                            self.cursor = self.get_text_position_info(self.cursor.absolute-1);
                         }
                         Some(self.cursor.clone())
                     },
@@ -325,10 +367,10 @@ impl Textbuffer {
                             self.cursor.absolute += 1;
                             if let Some(ch) = self.data.get(self.cursor.absolute-1) {
                                 if *ch == '\n' {
-                                    self.cursor = self.get_text_position_info(self.cursor.absolute);
+                                    self.cursor.line_start_absolute = self.cursor.absolute;
+                                    self.cursor.line_number += 1;
                                 }
                             }
-                            self.set_textpos(self.cursor.absolute);
                         }
                         Some(self.cursor.clone())
                     }
@@ -347,12 +389,41 @@ impl Textbuffer {
 
                     },
                     Next => {
-
+                        if self.cursor.absolute < self.len() && (self.cursor.line_number + 1) < self.line_count {
+                            if let Some(next_line_start) = self.find_next_line_abs_offset(self.cursor.absolute) {
+                                let column_pos = self.cursor.get_line_position();
+                                self.cursor.line_number += 1;
+                                self.cursor.line_start_absolute = next_line_start;
+                                let end = self.find_next_line_abs_offset(next_line_start).and_then(|val| Some(val-1)).unwrap_or(self.len());
+                                let line_len = end - next_line_start;
+                                if column_pos > line_len {
+                                    self.cursor.absolute = next_line_start + line_len;
+                                } else {
+                                    self.cursor.absolute = next_line_start + column_pos;
+                                }
+                            }
+                        }
                     }
                 }
                 Some(self.cursor.clone())
             }
         }
+    }
+
+    pub fn find_next_line_abs_offset(&self, current: usize) -> Option<usize> {
+        (current..self.len())
+            .into_iter()
+            .position(|i| {
+                let a = self.data.get(i);
+                if a.is_some() && *a.unwrap() == '\n' {
+                    true
+                } else {
+                    false
+                }
+            })
+            .and_then(|val| {
+                Some(current+val+1)
+            })
     }
 
     pub fn get_at(&self, pos: usize) -> Option<char> {
@@ -377,8 +448,8 @@ impl Textbuffer {
 
     pub fn clear_buffer_contents(&mut self) {
         self.data = GapBuffer::new();
-        self.cursor = TextPosition::new();
-        self.line_count = 0;
+        self.cursor = TextPosition::default();
+        self.line_count = 1;
     }
 
     pub fn delete(&mut self) -> Option<char> {
@@ -394,7 +465,7 @@ impl Textbuffer {
 
     pub fn line_from_buffer_index(&self, absolute: usize) -> Option<TextPosition> {
         let safe_pos_value = std::cmp::min(absolute, self.data.len());
-        let line_begin: Vec<usize> = (0..safe_pos_value + 1).rev().filter(|index| *index == 0 || self.data[*index] == '\n').collect();
+        let line_begin: Vec<usize> = (0..safe_pos_value + 1).rposition(|index| index == 0 || self.data[index] == '\n').collect();
         if line_begin.is_empty() {
             None
         } else {
@@ -420,7 +491,7 @@ impl Textbuffer {
             _scratch: vec![],
             observer: None,
             cursor: TextPosition::new(),
-            line_count: contents.chars().filter(|c| *c == '\n').collect::<Vec<char>>().len(),
+            line_count: contents.chars().filter(|c| *c == '\n').collect::<Vec<char>>().len() + 1,
             dirty: false
         };
         tb.data.map_to(contents.chars());

@@ -46,6 +46,7 @@ mod tests {
     use super::gap_buffer::GapBuffer as GB;
     // use super::Gap::GapBuffer as GB;
     use super::BufferString;
+    use crate::data::text_buffer::Textbuffer;
 
     #[test]
     fn test_gapbuffer_insert() {
@@ -96,9 +97,7 @@ mod tests {
     fn test_insert_newline() {
         let mut gb = GB::new();
         gb.map_to("hello wor".chars());
-        println!("Range before moving pos: {:?}", gb.gap);
         gb.set_gap_position(5);
-        println!("Range after moving pos: {:?}", gb.gap);
         // gb.delete();
         let a = gb.get(5);
         gb.insert('\n');
@@ -127,6 +126,13 @@ mod tests {
         let simon: String = "Simon".into();
         gb.map_to(simon.chars());
         assert_eq!("hello Simon", gb.read_string(0..25));
+    }
+
+    #[test]
+    fn test_text_buffer() {
+        let mut tb = Textbuffer::new();
+        tb.insert_data("hello Simon");
+        assert_eq!("hello Simon", tb.get_data_range(0, 25));
     }
 
 }

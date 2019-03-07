@@ -273,13 +273,12 @@ impl<T> Drop for GapBuffer<T> {
 
 impl BufferString for GapBuffer<char> {
     fn read_string(&self, range: std::ops::Range<usize>) -> String {
-        let res = if range.end < self.len() {
+        let res = if range.len() < self.len() {
             let mut tmpbuf = String::with_capacity(range.len());
             for i in range {
                 match self.get(i) {
                     Some(c) => {
-                        tmpbuf.insert(i, *c);
-                        // tmpbuf.insert(i, *c);
+                        tmpbuf.push(*c);
                     },
                     _ => {
 
