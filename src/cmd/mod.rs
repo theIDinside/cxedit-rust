@@ -21,10 +21,12 @@ pub enum Command {
     Find,
     Save,
     Open,
-    Quit
+    Quit,
+    Action(Action)
 }
 
 use self::Command::{Jump, Find, Save, Open};
+use crate::cmd::command_engine::Action;
 
 impl From<&Command> for &str {
     fn from(cmd: &Command) -> Self {

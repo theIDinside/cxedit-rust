@@ -1,5 +1,7 @@
 // #![allow(unused_variables)]
 // TODO: be sure to remove the #! when building release version. We don't want no forgotten pesky unused variables living freely in our code
+// TODO: clean up a BUNCH of code in editor.rs and view.rs (especially). Sane line & view management has been implemented
+//      but in that process a bunch of TRASH code was produced and basically trialed and error'd to success. A true nightmare.
 extern crate libc;
 extern crate termios;
 use std::env::args;

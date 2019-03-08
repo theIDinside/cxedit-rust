@@ -3,6 +3,7 @@ use crate::data::text_buffer::Textbuffer;
 use std::thread::sleep;
 use std::time::Duration;
 
+#[derive(Clone)]
 pub enum Action {
     Insert(usize, char),
     InsertData(usize, String),

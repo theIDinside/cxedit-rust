@@ -19,6 +19,8 @@ use crate::cmd::command_engine::ActionResult;
 use crate::editor::view::WinDim;
 use std::thread::sleep;
 use std::time::Duration;
+use std::ops::Range;
+use crate::data::text_buffer::TextPosition;
 
 pub fn debug_sleep(msg: Option<String>, val: Option<u64>) {
     println!("\x1b[25;10H{}", msg.unwrap_or(" ".into()));
@@ -78,6 +80,10 @@ impl Editor {
             config: Config::default(),
             c_e: CommandEngine::new(Arc::new(Mutex::new(Textbuffer::new())))
         }
+    }
+
+    pub fn is_pristine(&self) -> bool {
+        !self.buffers[0].lock().unwrap().is_dirty()
     }
 
     pub fn init(&mut self, settings: Option<Termios>) {
@@ -179,7 +185,8 @@ impl Editor {
                         },
                         Command::CommandInput => {
                             unimplemented!();
-                        }
+                        },
+                        Command::Action(_) => unimplemented!()
                     };
                 },
                 KeyCode::Escaped(esc_kc) => {
@@ -236,7 +243,8 @@ impl Editor {
             self.views[0].restore_statline();
             match kp {
                 KeyCode::Character(c) => {
-                    let pos = *&self.buffers[0].lock().unwrap().get_textpos().absolute;
+                    let abs_pos =self.buffers[0].lock().unwrap().get_textpos();
+                    let pos = abs_pos.absolute;
                     match self.c_e.execute(Action::Insert(pos, c)) {
                         ActionResult::OK => {
                             self.views[self.current_view].draw_view();
@@ -384,7 +392,7 @@ impl Editor {
                     self.views[self.current_view].update_cursor();
                 },
                 KeyCode::CtrlB => {
-                    self.views[self.current_view].draw_view();
+                    // self.views[self.current_view].draw_view();
                 },
                 KeyCode::CtrlC => {
                     // TODO: this is how reading from our config will look like, so that the bindings can be customizable
@@ -396,46 +404,57 @@ impl Editor {
                 KeyCode::Escaped(_esk) => {
                     match _esk {
                         EscapeKeyCode::Right => {
-                            let old_pos = self.buffers[self.current_buffer].lock().unwrap().get_textpos();
                             let pos = self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Char(MoveDir::Next)).unwrap();
-                            if old_pos != pos {
-                                if pos.line_index > old_pos.line_index {
-                                    self.views[self.current_view].view_cursor.row += 1;
-                                    self.views[self.current_view].view_cursor.col = 1;
-                                } else {
-                                    self.views[self.current_view].view_cursor.col += 1;
-                                }
-                                let pos = self.buffers[0].lock().unwrap().get_absolute_cursor_pos();
-                                let linepos = self.buffers[0].lock().unwrap().get_line_number_editing();
-                                let WinDim(x, _y) = self.views[0].win_size;
-                                let cursor_output_pos = WinDim(x-12, 1);
-                                let WinDim(valx, valy) = cursor_output_pos;
-                                let vc_pos = ViewCursor {col: valx as usize, row: valy as usize};
-                                let vop = ViewOperations::ClearLineRest;
-                                print!("{}{}{};{}|{};{}{}", vc_pos, vop, pos, linepos, self.views[0].view_cursor.col, self.views[0].view_cursor.row, self.views[0].view_cursor);
+                            self.views[0].view_cursor = ViewCursor::from(pos.clone());
+                            if (self.views[0].view_cursor.row - self.views[0].line_range.start) == self.views[0].win_size.1 as usize {
+                                self.views[0].scroll_down();
+                                self.views[0].draw_view();
+                                // self.views[0].view_cursor.row -= self.views[0].line_range.start;
+                            } else {
+                                self.views[0].view_cursor.row -= self.views[0].line_range.start;
+                                print!("{}", self.views[0].view_cursor);
                                 stdout().flush();
-                                // self.views[self.current_view].update_cursor();
                             }
                         },
                         EscapeKeyCode::Left => {
                             let pos = self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Char(MoveDir::Previous)).unwrap();
-                                self.views[0].view_cursor = ViewCursor::from(pos.clone());
-                                let WinDim(x, _y) = self.views[0].win_size;
-                                let cursor_output_pos = WinDim(x-12, 1);
-                                let WinDim(valx, valy) = cursor_output_pos;
-                                let vc_pos = ViewCursor {col: valx as usize, row: valy as usize};
-                                let vop = ViewOperations::ClearLineRest;
-                                print!("{}{}{};{}|{};{}{}", vc_pos, vop, pos.get_line_position(), &pos.line_index, self.views[0].view_cursor.col, self.views[0].view_cursor.row, self.views[0].view_cursor);
+                            self.views[0].view_cursor = ViewCursor::from(pos.clone());
+                            if (self.views[0].view_cursor.row - self.views[0].line_range.start) == 0 {
+                                self.views[0].scroll_up();
+                                self.views[0].draw_view();
+                            } else {
+                                self.views[0].view_cursor.row -= self.views[0].line_range.start;
+                                print!("{}", self.views[0].view_cursor);
                                 stdout().flush();
+                            }
                         },
                         EscapeKeyCode::Up => {
-                            self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Line(MoveDir::Previous));
-                        }
+                            let pos = self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Line(MoveDir::Previous)).unwrap();
+                            self.views[0].view_cursor = ViewCursor::from(pos.clone());
+                            if (self.views[0].view_cursor.row - self.views[0].line_range.start) == 0 {
+                                self.views[0].scroll_up();
+                                self.views[0].draw_view();
+                            } else {
+                                self.views[0].view_cursor.row -= self.views[0].line_range.start;
+                                print!("{}", self.views[0].view_cursor);
+                                stdout().flush();
+                            }
+                        },
                         EscapeKeyCode::Down => {
                             // self.buffers[self.current_buffer].lock().unwrap().move_cursor();
-                            let new_pos = self.buffers[0].lock().unwrap().move_cursor(MoveKind::Line(MoveDir::Next)).unwrap();
-                            self.views[0].view_cursor = ViewCursor::from(new_pos.clone());
-                            self.views[0].draw_view();
+                            let pos = self.buffers[0].lock().unwrap().move_cursor(MoveKind::Line(MoveDir::Next)).unwrap();
+                            self.views[0].view_cursor = ViewCursor::from(pos.clone());
+                            if (self.views[0].view_cursor.row - self.views[0].line_range.start) == self.views[0].win_size.1 as usize {
+                                self.views[0].scroll_down();
+                                self.views[0].draw_view();
+                                // self.views[0].view_cursor.row -= self.views[0].line_range.start;
+                            } else {
+                                self.views[0].view_cursor.row -= self.views[0].line_range.start;
+                                print!("{}", self.views[0].view_cursor);
+                                stdout().flush();
+                            }
+                            // self.views[0].draw_view();
+                            self.views[0].restore_statline();
                         }
                     }
                     // print!("{}", _esk.output());stdout().lock().flush();

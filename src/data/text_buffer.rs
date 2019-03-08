@@ -244,7 +244,7 @@ impl Textbuffer {
 
     pub fn get_text_position_info(&self, pos: usize) -> TextPosition {
         let mut tp = TextPosition::new();
-        let lv: Vec<char> = (0..pos).into_iter().rev().filter(|i| self.data[*i] == '\n').map(|i| self.data[i]).collect();
+        let lv: Vec<usize> = (0..pos).into_iter().rev().filter(|i| self.data[*i] == '\n').collect();
         let lineno = lv.len();
         tp.line_start_absolute = (0..pos).into_iter().rposition(|i| self.data[i] == '\n').and_then(|pos| Some(pos + 1)).unwrap_or(0usize);
         tp.line_index = lineno;
@@ -263,12 +263,15 @@ impl Textbuffer {
             return Some(TextPosition::default());
         }
         let mut line_counter = 0;
-
+        let vec = (0..self.len()).into_iter().filter(|uidx|{
+            self.data[*uidx] == '\n'
+        }).collect::<Vec<usize>>();
+        let line_end_pos = vec.get(line);
         let nlcp = (0..self.data.len()).into_iter().take_while(|index| {
             if self.data[*index] == '\n' {
                 line_counter += 1;
             }
-            line_counter < line+1
+            line_counter <= line+1
         }).collect::<Vec<usize>>().into_iter().filter(|i| self.data[*i] == '\n').collect::<Vec<usize>>();
         line_counter = 0;
         let line_end = *nlcp.last().unwrap_or(&buf_len);
@@ -277,6 +280,24 @@ impl Textbuffer {
                 .rposition(|i| self.data[i] == '\n').and_then(|v| Some(v+1)).unwrap_or(0usize);
         // println!("\x1b[25;10H Line begin: {} End: {}: #{}", line_begin, line_end, line);
         Some(TextPosition::from((line_end, line_begin, nlcp.len())))
+    }
+
+    pub fn get_line_end_pos_0_idx(&self, line: usize) -> Option<TextPosition> {
+        let buf_len = self.len();
+        if buf_len == 0 {
+            return Some(TextPosition::default());
+        }
+        let mut line_counter = 0;
+        let vec = (0..self.len()).into_iter().filter(|uidx|{
+            self.data[*uidx] == '\n'
+        }).collect::<Vec<usize>>();
+
+        let line_end = vec.get(line).unwrap();
+        let line_begin =
+            (0..*line_end).into_iter()
+                .rposition(|i| self.data[i] == '\n').and_then(|v| Some(v+1)).unwrap_or(0usize);
+        // println!("\x1b[25;10H Line begin: {} End: {}: #{}", line_begin, line_end, line);
+        Some(TextPosition::from((*line_end, line_begin, line)))
     }
 
     pub fn get_line_end_abs(&self, line_number: usize) -> Option<TextPosition> {
@@ -297,7 +318,10 @@ impl Textbuffer {
             return Some(TextPosition::from((line_end, linebegin, line_number-1)));
         }
 
+        // lines_endings.get(line_number).unwrap_or(len)
+
         if line_number > lines_endings.len() && lines_endings.len() == 0 {
+
             Some(TextPosition::from((self.data.len(), 0, 0)))
         } else if line_number > lines_endings.len() {
             let this_line_abs = lines_endings[lines_endings.len()-1]; // here it means, this value is self.data.len()
@@ -319,6 +343,26 @@ impl Textbuffer {
                 .collect();
         let line_pos = lines.get(line_number-1).and_then(|&value| Some(value+1)).unwrap_or(0usize);
         Some(TextPosition::from((line_pos, line_pos, line_number-1)))
+    }
+
+    pub fn get_line_abs_end_index(&self, line_number: usize) -> Option<TextPosition> {
+        let lines: Vec<usize> =
+            (0..self.len())
+                .into_iter()
+                .filter(|&index| index == 0 || self.data[index] == '\n')
+                .collect();
+        let line_pos = lines.get(line_number-1).and_then(|&value| Some(value+1)).unwrap_or(0usize);
+        Some(TextPosition::from((line_pos, line_pos, line_number-1)))
+    }
+
+    pub fn get_line_abs_end_index2(&self, line_number: usize) -> Option<TextPosition> {
+        let lines: Vec<usize> =
+            (0..self.len())
+                .into_iter()
+                .filter(|&index| self.data[index] == '\n')
+                .collect();
+        let line_pos = lines.get(line_number).and_then(|&value| Some(value+1)).unwrap_or(0usize);
+        Some(TextPosition::from((line_pos, line_pos, line_number)))
     }
 
     pub fn get_line_start_abs(&self, line_number: usize) -> Option<TextPosition> {
@@ -372,7 +416,11 @@ impl Textbuffer {
                 match dir {
                     Previous => {
                         if self.cursor.absolute > 0 {
-                            self.cursor = self.get_text_position_info(self.cursor.absolute-1);
+                            if self.cursor.absolute-1 < self.cursor.line_start_absolute {
+                                self.cursor = self.get_text_position_info(self.cursor.absolute-1);
+                            } else {
+                                self.cursor.absolute -= 1;
+                            }
                         }
                         Some(self.cursor.clone())
                     },
@@ -398,14 +446,26 @@ impl Textbuffer {
                 Some(self.cursor.clone())
             },
             MoveKind::Line(dir) => {
+                let column_pos = self.cursor.get_line_position();
                 match dir {
                     Previous => {
-
+                        if self.cursor.absolute > 0 && self.cursor.line_index > 0 {
+                            if let Some(next_line_start) = self.find_prev_line_abs_offset(self.cursor.absolute) {
+                                self.cursor.line_index -= 1;
+                                let begin = self.find_prev_line_abs_offset(next_line_start).and_then(|val| Some(val+1)).unwrap_or(0);
+                                self.cursor.line_start_absolute = begin;
+                                let line_len = next_line_start - begin;
+                                if column_pos > line_len {
+                                    self.cursor.absolute = next_line_start;
+                                } else {
+                                    self.cursor.absolute = begin + column_pos;
+                                }
+                            }
+                        }
                     },
                     Next => {
                         if self.cursor.absolute < self.len() && (self.cursor.line_index + 1) < self.line_count {
                             if let Some(next_line_start) = self.find_next_line_abs_offset(self.cursor.absolute) {
-                                let column_pos = self.cursor.get_line_position();
                                 self.cursor.line_index += 1;
                                 self.cursor.line_start_absolute = next_line_start;
                                 let end = self.find_next_line_abs_offset(next_line_start).and_then(|val| Some(val-1)).unwrap_or(self.len());
@@ -422,6 +482,19 @@ impl Textbuffer {
                 Some(self.cursor.clone())
             }
         }
+    }
+
+    pub fn find_prev_line_abs_offset(&self, current: usize) -> Option<usize> {
+        (0..current).into_iter().rposition(|ch_idx| {
+            let a = self.data.get(ch_idx);
+            if a.is_some() && *a.unwrap() == '\n' {
+                true
+            } else {
+                false
+            }
+        }).and_then(|index_neg_offset| {
+            Some(index_neg_offset)
+        })
     }
 
     pub fn find_next_line_abs_offset(&self, current: usize) -> Option<usize> {

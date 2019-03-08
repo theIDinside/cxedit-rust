@@ -58,19 +58,21 @@ impl <T> GapBuffer<T> {
     }
 
     pub fn set_gap_position(&mut self, pos: usize) {
-        if pos > self.len() {
-            panic!("GapBuffer index {} out of bounds", pos);
-        }
-        unsafe {
-            let gap = self.gap.clone();
-            if pos > gap.start {
-                let distance = pos - gap.start;
-                copyrange(self.space(gap.end), self.space_mut(gap.start), distance);
-            } else if pos < gap.start {
-                let distance = gap.start - pos;
-                copyrange(self.space(pos), self.space_mut(gap.end - distance), distance);
+        if pos != self.gap.start {
+            if pos > self.len() {
+                panic!("GapBuffer index {} out of bounds", pos);
             }
-            self.gap = pos .. pos+ gap.len();
+            unsafe {
+                let gap = self.gap.clone();
+                if pos > gap.start {
+                    let distance = pos - gap.start;
+                    copyrange(self.space(gap.end), self.space_mut(gap.start), distance);
+                } else if pos < gap.start {
+                    let distance = gap.start - pos;
+                    copyrange(self.space(pos), self.space_mut(gap.end - distance), distance);
+                }
+                self.gap = pos..pos + gap.len();
+            }
         }
     }
 

@@ -18,6 +18,7 @@ use crate::editor::color::{SetColor, Color};
 use std::thread::sleep;
 use std::time::Duration;
 use crate::editor::editor::debug_sleep;
+use std::ops::Range;
 
 #[derive(Debug)]
 pub struct WinDim(pub u16, pub u16);
@@ -165,9 +166,31 @@ impl Display for ViewCursor {
     }
 }
 
+pub trait ViewRange {
+    fn shift_forward(&mut self, len: usize);
+    fn shift_backward(&mut self, len: usize);
+}
+
+impl ViewRange for std::ops::Range<usize> {
+    fn shift_forward(&mut self, len: usize) {
+        self.start += len;
+        self.end += len;
+    }
+
+    fn shift_backward(&mut self, len: usize) {
+        if len > self.start {
+            panic!("Shifted usize range out of bounds (usize can't be negative)");
+        }
+        self.start -= len;
+        self.end -= len;
+    }
+}
+
 impl Drop for View {
     fn drop(&mut self) {
         let esc = 27u8;
+        // TODO: uncomment last line when bugs are sorted/no major bugs are being found, or comment it out when they are.
+        //      if this prints, any error message that might panic! the application, will be lost from the stdout.
         // \x1b[m ends whatever ansi escape sequence currently written to the terminal,
         // and restores to terminal default
         print!("\x1b[m {}[2J{}[1;1H", esc as char, esc as char);
@@ -210,6 +233,8 @@ impl View {
             None
         }
     }
+
+
 
     pub fn get_text_area_height(&self) -> usize {
         self.win_size.1 as usize - 1
@@ -352,6 +377,18 @@ impl View {
         }
     }
 
+    pub fn write_character_buffered(&mut self, ch: char) {
+        if ch == '\n' {
+            self.view_cursor.row += 1;
+            self.view_cursor.col = 1;
+            print!("\r\n");
+        } else {
+            self.view_cursor.col += 1;
+            //print!("{}{}{}", self.view_cfg.bg_color, self.view_cfg.fg_color, ch);
+            print!("{}", ch);
+        }
+    }
+
     pub fn update_with_line(&mut self, data: &str) {
         let empty_space = self.win_size.0 as usize - data.len();
         let mut vc = self.view_cursor;
@@ -404,73 +441,86 @@ impl View {
         print!("{}", self.view_cursor);
     }
 
-    pub fn scroll_down(&mut self) {
-        let begin = self.line_range.start;
-        let end = self.line_range.end;
-        self.line_range = (begin + 1)..(end + 1);
-        self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.start).unwrap();
-        let bottom_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.end).unwrap();
-    }
-
-    pub fn scroll_x_up(&mut self, steps: usize) {
-        let begin = self.line_range.start;
-        let end = self.line_range.end;
-        self.line_range = (begin - steps)..(end - steps);
-        self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.start).unwrap();
-        let bottom_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.end).unwrap();
-    }
-
-    pub fn scroll_x_down(&mut self, steps: usize) {
-        let begin = self.line_range.start;
-        let end = self.line_range.end;
-        self.line_range = (begin + steps)..(end + steps);
-        self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.start).unwrap();
-        let bottom_line = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.end).unwrap();
-    }
-
-    pub fn correct_view_cursor(&mut self) {
-        if self.view_cursor.row > self.line_range.end {
-            let diff = self.view_cursor.row - self.line_range.end;
-            self.view_cursor.row -= diff;
-        } else if self.view_cursor.row < self.line_range.start {
-            let diff = self.line_range.start - self.view_cursor.row;
-            self.view_cursor.row += diff;
+    pub fn scroll_up(&mut self) {
+        let shift = self.get_text_area_height() / 2;
+        if shift > self.line_range.start && self.line_range.start != 0{
+            self.line_range.shift_backward(self.line_range.start);
+            self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos_0_idx(self.line_range.start).unwrap();
+        } else if shift <= self.line_range.start {
+            self.line_range.shift_backward(shift);
+            self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos_0_idx(self.line_range.start).unwrap();
         }
-        self.view_cursor.row -= self.line_range.start;
+    }
+
+    pub fn scroll_down(&mut self) {
+        let shift = self.get_text_area_height() / 2;
+        self.line_range.shift_forward(shift);
+        self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos_0_idx(self.line_range.start).unwrap();
+    }
+
+    pub fn check_at_boundary_cross(&mut self) {
+        let tp = self.buffer_ref.lock().unwrap().get_textpos();
+        self.view_cursor = ViewCursor::from(tp.clone());
+        if self.view_cursor.row >= self.line_range.end && tp.line_index >= self.line_range.end {
+            let diff = self.view_cursor.row - self.line_range.end;
+            let begin = self.line_range.start;
+            let end = self.line_range.end;
+            self.line_range = (begin + diff)..(end + diff);
+            self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos_0_idx(self.line_range.start).unwrap();
+            // TODO: Remove this when you are 1000000000% certain scrolling functionality works. This fucking bullshit took me 2 days to get right.
+            // debug_sleep(Some(format!("Moving after range.. abs_begin: {}", self.top_line.line_start_absolute)), Some(2500));
+            let bottom = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.end).unwrap();
+            // self.view_cursor = ViewCursor::from(bottom);
+            if self.view_cursor.row >= self.win_size.1 as usize - 1 {
+                let win_curs_diff = self.view_cursor.row - self.win_size.1 as usize;
+                self.view_cursor.row -= (self.line_range.start);
+                // self.view_cursor.row -= win_curs_diff;
+            }
+        } else if tp.line_index < self.line_range.start && self.view_cursor.row != 0 {
+            let diff = self.line_range.start - tp.line_index;
+            // let diff = (self.line_range.start) - (self.view_cursor.row);
+            let begin = self.line_range.start;
+            let end = self.line_range.end;
+            self.line_range = (begin -diff)..(end - diff);
+            self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos_0_idx(self.line_range.start).unwrap();
+            // TODO: Remove this when you are 1000000000% certain scrolling functionality works. This fucking bullshit took me 2 days to get right.
+            // debug_sleep(Some(format!("Moving before range.. abs_begin: {}", self.top_line.line_start_absolute)), Some(2500));
+        } else if (self.view_cursor.row) <= self.line_range.start+1 && self.line_range.start == 0 {
+            let line_pos = self.buffer_ref.lock().unwrap().get_textpos();
+            // debug_sleep(Some(format!("We are trying to move at the topline: {}", line_pos.clone().absolute)), Some(2500));
+            self.view_cursor = ViewCursor::from(line_pos);
+        } else {
+            self.view_cursor = ViewCursor::from(self.buffer_ref.lock().unwrap().get_textpos());
+            self.view_cursor.row -= self.line_range.start;
+        }
     }
 
     pub fn draw_view(&mut self) {
-
-        if self.view_cursor.row >= self.win_size.1 as usize - 2 {
-            let diff = (self.view_cursor.row - (self.win_size.1 as usize - 2));
-            self.scroll_x_down(diff);
-            self.correct_view_cursor();
-        } else if self.view_cursor.row < self.line_range.start {
-            let diff = (self.line_range.start - self.view_cursor.row);
-            self.scroll_x_up(diff);
-            self.correct_view_cursor();
-        }
-
+        self.check_at_boundary_cross();
+        let tmp = self.view_cursor;
         let abs_begin = self.top_line.line_start_absolute; // and "anchor" into the buffer, so that we know where the top line of the view -> buffer is
         let line_count = self.win_size.1 - 1;
         let d = {
             let guard = self.buffer_ref.lock().unwrap();
-            let line_end_abs = guard.get_line_end_abs(self.top_line.line_index +line_count as usize-3).unwrap().absolute;
+            let line_end_abs = guard.get_line_abs_end_index(self.top_line.line_index + self.line_range.len()+1).unwrap().absolute;
             let d = guard.get_data_range(abs_begin, line_end_abs);
             let esc = 27u8;
             print!("{}[2J{}[1;1H", esc as char, esc as char);
             let mut a = " ".repeat(self.win_size.0 as usize);
             a.push('\n');
             a.push('\r');
-            let res = a.repeat(self.win_size.1 as usize);
+            let res = a.repeat(self.win_size.1 as usize + 1);
+
+            let STATUS_TITLE = "[status]: ";
+            let fullstat = STATUS_TITLE.chars().chain(" ".repeat(self.win_size.0 as usize - STATUS_TITLE.len()).chars());
+
             let mut status = " ".repeat(self.win_size.0 as usize);
             let status_title = "[status]: ";
             self.statline_view_cursor.col = status_title.len() + 1;
             status.replace_range(0..status_title.len(), status_title);
-            print!("{}{}{}{}[1;1H",
+            // let t = self.view_cfg.bg_color.colorize(res.as_ref()).chars().chain("\x1b[1;1H".chars()).collect::<&str>();
+            print!("\x1b[2J\x1b[1;1H{}{}[1;1H",
                    self.view_cfg.bg_color.colorize(res.as_ref()),
-                   self.view_cfg.stat_line_color.1,
-                   self.view_cfg.stat_line_color.0.colorize(status.as_ref()),
                    esc as char);
             self.view_cursor = ViewCursor::default();
             // clear the screen
@@ -479,12 +529,16 @@ impl View {
             // paint status line
             d
         };
+        print!("{}{}", self.view_cfg.bg_color, self.view_cfg.fg_color);
         for c in d.chars() {
-            self.write_character(c);
+            self.write_character_buffered(c);
         }
-        self.view_cursor = ViewCursor::from(self.buffer_ref.lock().unwrap().get_textpos());
-        print!("{}", self.view_cursor);
-        stdout().flush();
+        // self.view_cursor = ViewCursor::from(self.buffer_ref.lock().unwrap().get_textpos());
+        self.view_cursor = tmp;
+        // self.fix_range_old();
+        // print!("{}", self.view_cursor);
+        self.restore_statline();
+        // stdout().flush();
         /* TODO: get data from buffer in the range of top_line .. (top_line + (winsize.x * winsize.y)
             scan content, for new lines, and filter out any newlines that won't fit on screen
             i.e, newline count > winsize.y. newline count being, find newlines between absolute
