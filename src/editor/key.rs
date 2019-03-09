@@ -1,4 +1,5 @@
-#[derive(Hash, Eq, PartialOrd, PartialEq, Clone)]
+use crate::{Serialize, Deserialize};
+#[derive(Hash, Eq, PartialOrd, PartialEq, Clone, Serialize, Deserialize, Debug)]
 pub enum KeyCode {
     CtrlBackspace,
     CtrlA,
@@ -52,7 +53,7 @@ impl KeyCode {
     }
 }
 
-#[derive(Hash, Eq, PartialOrd, PartialEq, Clone)]
+#[derive(Hash, Eq, PartialOrd, PartialEq, Clone, Serialize, Deserialize, Debug)]
 pub enum EscapeKeyCode {
     Left,
     Right,

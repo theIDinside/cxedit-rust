@@ -28,7 +28,7 @@ Some basic functionality that is currently working:
 - [ ] Inter process communication (for use to implement calls to RLS or racer for example and other language servers)
 - [ ] Macros (not really that hard... the logic is already there conceptually, and is similiar to that of keeping track of history
  in the command engine I am building, using the command design pattern)
-
+- [ ] Completion engine, a lá abbreviations in Vim.
 
 #### Configuration
 Configuration will be implemented most likely using serde, to produce json-like 
@@ -58,6 +58,7 @@ or
     ./target/debug/cxedit Cargo.toml
 ```
 ![Example color setup](one_color_setup.png)
+![Another example color setup](another_color_setup.png)
 
 
 

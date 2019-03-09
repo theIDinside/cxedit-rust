@@ -2,15 +2,50 @@ use std::sync::{Arc, Mutex};
 use crate::data::text_buffer::Textbuffer;
 use std::thread::sleep;
 use std::time::Duration;
+use std::collections::HashMap;
+use crate::{Serialize as S, Deserialize as D};
+pub enum Position {
+    Absolute(usize),
+    Relative(usize)
+}
 
-#[derive(Clone)]
-pub enum Action {
-    Insert(usize, char),
-    InsertData(usize, String),
-    Delete(usize, char),
-    Remove(usize, char),
+// using private alias types. Makes reading the source code easier and quicker to grasp.
+type MacroName = String;
+type AbsolutePos = usize;
+
+#[derive(Clone, S, D, Debug)]
+pub enum Operation {
+    Insert(AbsolutePos, char),
+    InsertData(AbsolutePos, String),
+    Delete(AbsolutePos, char),
+    Remove(AbsolutePos, char),
+    MacroRecord,
+    MacroStop,
+    MacroPlay(MacroName),
     Undo,
-    Redo
+    Redo,
+}
+
+pub struct Macro {
+    data: String,
+    lines: usize,
+    len: usize
+}
+
+impl Macro {
+    pub fn play(&self) -> &str {
+        &self.data
+    }
+}
+
+impl Default for Macro {
+    fn default() -> Self {
+        Macro {
+            data: String::new(),
+            lines: 0,
+            len: 0
+        }
+    }
 }
 
 pub enum ActionResult {
@@ -19,9 +54,11 @@ pub enum ActionResult {
 }
 
 pub struct CommandEngine {
-    history: Vec<Action>,
-    forward_history: Vec<Action>,
-    buffer_ref: Arc<Mutex<Textbuffer>>
+    history: Vec<Operation>,
+    forward_history: Vec<Operation>,
+    buffer_ref: Arc<Mutex<Textbuffer>>,
+    macros: HashMap<String, Macro>,
+    macro_recording: bool
 }
 
 impl CommandEngine {
@@ -29,7 +66,9 @@ impl CommandEngine {
         CommandEngine {
             history: vec![],
             forward_history: vec![],
-            buffer_ref: buffer.clone()
+            buffer_ref: buffer.clone(),
+            macros: HashMap::new(),
+            macro_recording: false
         }
     }
 
@@ -37,9 +76,10 @@ impl CommandEngine {
         self.buffer_ref = buf_ref.clone();
     }
 
-    pub fn execute(&mut self, action: Action) -> ActionResult {
+    pub fn execute(&mut self, action: Operation) -> ActionResult {
+
         match &action {
-            Action::Insert(pos, ch) => {
+            Operation::Insert(pos, ch) => {
                 let mut guard = self.buffer_ref.lock().unwrap();
                 let bufpos = guard.get_textpos().absolute;
                 if *pos == bufpos {
@@ -52,7 +92,7 @@ impl CommandEngine {
                 self.forward_history.clear();
                 ActionResult::OK
             },
-            Action::InsertData(pos, data) => {
+            Operation::InsertData(pos, data) => {
                 let mut guard = self.buffer_ref.lock().unwrap();
                 let bufpos = guard.get_textpos().absolute;
                 if *pos == bufpos {
@@ -64,7 +104,7 @@ impl CommandEngine {
                 self.history.push(action);
                 ActionResult::OK
             },
-            Action::Delete(pos, _) => {
+            Operation::Delete(pos, _) => {
                 let mut guard = self.buffer_ref.lock().unwrap();
                 let bufpos = guard.get_textpos().absolute;
                 if *pos == bufpos {
@@ -76,7 +116,7 @@ impl CommandEngine {
                 self.history.push(action);
                 ActionResult::OK
             },
-            Action::Remove(pos, ch) => {
+            Operation::Remove(pos, ch) => {
                 // sleep(Duration::from_millis(1500));
                 let mut guard = self.buffer_ref.lock().unwrap();
                 guard.set_textpos(*pos);
@@ -88,16 +128,16 @@ impl CommandEngine {
                 } else if *pos > 0 {
                     // guard.set_textpos(*pos);
                     guard.remove();
-                    self.history.push(Action::Remove(bufpos-1, *ch));
+                    self.history.push(Operation::Remove(bufpos-1, *ch));
                     ActionResult::OK
                 } else {
                     ActionResult::ERR
                 }
             },
-            Action::Undo => {
+            Operation::Undo => {
                 if let Some(act) = self.history.last() {
                     match act {
-                        Action::Delete(pos, ch) => {
+                        Operation::Delete(pos, ch) => {
                             let mut guard= self.buffer_ref.lock().unwrap();
                             let bufpos = guard.get_textpos().absolute;
                             if *pos == bufpos {
@@ -106,11 +146,11 @@ impl CommandEngine {
                                 guard.set_textpos(*pos);
                                 guard.insert_ch(*ch);
                             }
-                            self.forward_history.push(Action::Insert(*pos, *ch));
+                            self.forward_history.push(Operation::Insert(*pos, *ch));
                             self.history.pop();
                             ActionResult::OK
                         },
-                        Action::Insert(pos, ch) => {
+                        Operation::Insert(pos, ch) => {
                             let mut guard = self.buffer_ref.lock().unwrap();
                             let bufpos = guard.get_textpos().absolute;
                             if *pos == bufpos {
@@ -119,11 +159,11 @@ impl CommandEngine {
                                 guard.set_textpos(*pos);
                                 guard.delete();
                             }
-                            self.forward_history.push(Action::Remove(*pos, *ch));
+                            self.forward_history.push(Operation::Remove(*pos, *ch));
                             self.history.pop();
                             ActionResult::OK
                         },
-                        Action::Remove(pos, ch) => {
+                        Operation::Remove(pos, ch) => {
                             let mut guard = self.buffer_ref.lock().unwrap();
                             let bufpos = guard.get_textpos().absolute;
                             if *pos == bufpos {
@@ -132,29 +172,33 @@ impl CommandEngine {
                                 guard.set_textpos(*pos);
                                 guard.insert_ch(*ch);
                             }
-                            self.forward_history.push(Action::Insert(*pos, *ch));
+                            self.forward_history.push(Operation::Insert(*pos, *ch));
                             self.history.pop();
                             ActionResult::OK
                         },
-                        Action::InsertData(pos, data) => {
+                        Operation::InsertData(pos, data) => {
                             let mut guard = self.buffer_ref.lock().unwrap();
                             let bufpos = guard.get_textpos().absolute;
                             if *pos == bufpos {
                                 for i in 0..data.len() {
                                     if let Some(ch) = guard.delete() {
-                                        self.forward_history.push(Action::Remove(*pos+i, ch));
+                                        self.forward_history.push(Operation::Remove(*pos+i, ch));
                                     }
                                 }
                             } else {
                                 guard.set_textpos(*pos);
                                 for i in 0..data.len() {
                                     if let Some(ch) = guard.delete() {
-                                        self.forward_history.push(Action::Remove(*pos+i, ch));
+                                        self.forward_history.push(Operation::Remove(*pos+i, ch));
                                     }
                                 }
                             }
                             self.history.pop();
                             ActionResult::OK
+                        },
+                        Operation::MacroPlay(macroname) => {
+                            let m = &self.macros[macroname];
+                            unimplemented!("Undoing played macros not yet implemented!")
                         },
                         _ => {
                             unimplemented!("This is not implemented yet!!!");
@@ -166,7 +210,20 @@ impl CommandEngine {
                     ActionResult::ERR
                 }
             },
-            Action::Redo => {
+            Operation::Redo => {
+                unimplemented!("Redoing last undo command not yet implemented");
+                ActionResult::ERR
+            },
+            Operation::MacroPlay(name) => {
+                unimplemented!("Playing macros not yet implemented");
+                ActionResult::ERR
+            }
+            Operation::MacroRecord => {
+                unimplemented!("Recording macros not yet implemented");
+                ActionResult::ERR
+            }
+            Operation::MacroStop => {
+                unimplemented!("Recording macros not yet implemented");
                 ActionResult::ERR
             }
         }

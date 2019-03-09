@@ -14,13 +14,16 @@ use crate::editor::view::ViewOperations;
 use crate::cfg::Config;
 use crate::editor::key::{KeyCode, EscapeKeyCode};
 use crate::cmd::command_engine::CommandEngine;
-use crate::cmd::command_engine::Action;
+use crate::cmd::command_engine::Operation;
 use crate::cmd::command_engine::ActionResult;
 use crate::editor::view::WinDim;
 use std::thread::sleep;
 use std::time::Duration;
 use std::ops::Range;
 use crate::data::text_buffer::TextPosition;
+use crate::cmd::StatlineCommand;
+use crate::cmd::StatlineCommandFlag;
+use crate::cmd::StatlineCommandFlagList;
 
 pub fn debug_sleep(msg: Option<String>, val: Option<u64>) {
     println!("\x1b[25;10H{}", msg.unwrap_or(" ".into()));
@@ -42,7 +45,7 @@ pub struct Editor {
     original_terminal_settings: Option<Termios>,
     _input_mode: InputMode,
     config: Config,
-    c_e: CommandEngine
+    cmd_engine: CommandEngine
 }
 
 impl Drop for Editor {
@@ -60,12 +63,6 @@ impl Drop for Editor {
     }
 }
 
-#[derive(Clone)]
-pub enum StatlineCommand {
-    OpenFile(Option<String>),
-    SaveFile(Option<String>),
-    Goto(Option<usize>)
-}
 
 impl Editor {
     pub fn new() -> Editor {
@@ -78,7 +75,7 @@ impl Editor {
             original_terminal_settings: None,
             _input_mode: InputMode::Insert,
             config: Config::default(),
-            c_e: CommandEngine::new(Arc::new(Mutex::new(Textbuffer::new())))
+            cmd_engine: CommandEngine::new(Arc::new(Mutex::new(Textbuffer::new())))
         }
     }
 
@@ -88,6 +85,8 @@ impl Editor {
 
     pub fn init(&mut self, settings: Option<Termios>) {
         self.original_terminal_settings = settings;
+        self.config = Config::read_config(Path::new("config.rc"));
+
         if self.buffers.len() != 0 {
             self.buffers.push(Arc::new(Mutex::new(Textbuffer::new())));
         }
@@ -96,7 +95,7 @@ impl Editor {
         v.init();
         self.views.push(v);
         self.running = true;
-        self.c_e.register_buffer(self.buffers[0].clone());
+        self.cmd_engine.register_buffer(self.buffers[0].clone());
     }
 
     pub fn open(&mut self, f: &Path) {
@@ -170,14 +169,22 @@ impl Editor {
                 KeyCode::Enter => {
                     return match cmd {
                         Command::Open => {
-                            Some(StatlineCommand::OpenFile(Some(input.clone())))
+                            let (file, flags) = input.split_at(input.find(" ").unwrap_or(input.len()-1));
+                            Some(StatlineCommand::OpenFile(Some(file.into()), StatlineCommandFlagList::from(flags).has_to_vec()))
                         },
                         Command::Save => {
-                            Some(StatlineCommand::SaveFile(Some(input.clone())))
+                            let (file, flags) = input.split_at(input.find(" ").unwrap_or(input.len()-1));
+                            Some(StatlineCommand::SaveFile(Some(file.into()), StatlineCommandFlagList::from(flags).has_to_vec()))
                         },
-                        Command::Find => unimplemented!(),
+                        Command::Find => {
+                            if input.len() > 0 {
+                                Some(StatlineCommand::Find(Some(input)))
+                            } else {
+                                None
+                            }
+                        },
                         Command::Jump => {
-                            Some(StatlineCommand::Goto(Some(input.parse::<usize>().unwrap_or(0usize))))
+                            input.parse::<usize>().ok().and_then(|v| Some(StatlineCommand::Goto(Some(v)))).or(Some(StatlineCommand::Error(format!("Couldn't parse line number from {}", input))))
                         },
                         Command::Move(_mk) => unimplemented!(),
                         Command::Quit => {
@@ -214,7 +221,10 @@ impl Editor {
                             }
                         },
                     }
-                }
+                },
+                KeyCode::Tab => {
+                  // TODO: statline autocompletion
+                },
                 KeyCode::Esc => {
                     return None;
                 },
@@ -229,8 +239,8 @@ impl Editor {
         &mut self.views[self.current_view]
     }
 
-    pub fn statline_error_msg(&self, msg: &str) {
-
+    pub fn statline_error_msg(&mut self, msg: &str) {
+        self.views[0].on_statline_error(msg);
     }
 
     // TODO: split up run function, to remove the intense complexity and spaghettization of code
@@ -245,7 +255,7 @@ impl Editor {
                 KeyCode::Character(c) => {
                     let abs_pos =self.buffers[0].lock().unwrap().get_textpos();
                     let pos = abs_pos.absolute;
-                    match self.c_e.execute(Action::Insert(pos, c)) {
+                    match self.cmd_engine.execute(Operation::Insert(pos, c)) {
                         ActionResult::OK => {
                             self.views[self.current_view].draw_view();
                         },
@@ -257,7 +267,7 @@ impl Editor {
                 },
                 KeyCode::Enter => {
                     let pos = *&self.buffers[0].lock().unwrap().get_textpos().absolute;
-                    match self.c_e.execute(Action::Insert(pos, '\n')) {
+                    match self.cmd_engine.execute(Operation::Insert(pos, '\n')) {
                         ActionResult::OK => {
                             self.views[0].draw_view();
                         },
@@ -273,7 +283,7 @@ impl Editor {
                     };
                     if pos > 0 {
                         let c = self.buffers[0].lock().unwrap().get_at(pos-1).unwrap();
-                        match self.c_e.execute(Action::Remove(pos, c)) {
+                        match self.cmd_engine.execute(Operation::Remove(pos, c)) {
                             ActionResult::OK => {
                             self.views[0].draw_view();
                             },
@@ -285,19 +295,12 @@ impl Editor {
                 },
                 KeyCode::Tab => {
                     let pos = *&self.buffers[0].lock().unwrap().get_textpos().absolute;
-                    match self.c_e.execute(Action::InsertData(pos, "    ".into())) {
+                    match self.cmd_engine.execute(Operation::InsertData(pos, "    ".into())) {
                         ActionResult::OK => {
                             self.views[self.current_view].draw_view();
                         },
-                        ActionResult::ERR => {
-
-                        }
+                        ActionResult::ERR => {}
                     }
-                    /*
-                    self.buffers[0].lock().unwrap().insert_data("    ");
-                    for _ in 0..4 {
-                        self.views[0].write_character(' ');
-                    }*/
                 },
                 KeyCode::Esc => {},
                 KeyCode::CtrlBackspace => {},
@@ -309,8 +312,10 @@ impl Editor {
                         self.buffers[0].lock().unwrap().set_textpos(line_pos.clone().unwrap().absolute);
                         self.views[0].view_cursor = ViewCursor::from(line_pos.unwrap());
                         self.views[0].draw_view();
+                    } else if let Some(StatlineCommand::Error(msg)) = cmd {
+                        self.statline_error_msg(&"[goto error]: ".chars().chain(msg.chars()).collect::<String>());
                     } else {
-                        self.statline_error_msg("Input could not be parsed to a number");
+                        self.statline_error_msg("Unknown input error, command not performed!");
                     }
                 },
                 KeyCode::CtrlV => {},
@@ -323,7 +328,7 @@ impl Editor {
                     // TODO: implement Config for editor. Then request mapping of key to command via self.get_keybinding(KeyCode::CtrlS)
                     self.views[0].on_save_file();
                     let cmd = self.statline_input(Command::Save);
-                    if let Some(SaveFile(Some(suggested_fname))) = cmd {
+                    if let Some(SaveFile(Some(suggested_fname), flags)) = cmd {
                         let p = Path::new(&suggested_fname);
                         match self.buffers[0].lock().unwrap().save_to_file(p, None) {
                             Ok(file_size) => {
@@ -341,7 +346,7 @@ impl Editor {
                 KeyCode::CtrlO => {
                     self.views[self.current_view].on_open_file();
                     let cmd = self.statline_input(Command::Open);
-                    if let Some(StatlineCommand::OpenFile(Some(fname))) = cmd {
+                    if let Some(StatlineCommand::OpenFile(Some(fname), flags)) = cmd {
                         match read_to_string(Path::new(&fname)) {
                             Ok(data) => {
                                 let lines_to_print = self.get_view().win_size.1 - 1;
@@ -371,7 +376,7 @@ impl Editor {
                     }
                 },
                 KeyCode::CtrlZ => {
-                    match self.c_e.execute(Action::Undo) {
+                    match self.cmd_engine.execute(Operation::Undo) {
                         ActionResult::OK => {
                             self.views[0].draw_view();
                         },
@@ -412,9 +417,9 @@ impl Editor {
                                 // self.views[0].view_cursor.row -= self.views[0].line_range.start;
                             } else {
                                 self.views[0].view_cursor.row -= self.views[0].line_range.start;
-                                print!("{}", self.views[0].view_cursor);
                                 stdout().flush();
                             }
+                            self.views[0].statline_update_line_number(pos.line_index+1, pos.get_line_position()+1);
                         },
                         EscapeKeyCode::Left => {
                             let pos = self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Char(MoveDir::Previous)).unwrap();
@@ -424,9 +429,9 @@ impl Editor {
                                 self.views[0].draw_view();
                             } else {
                                 self.views[0].view_cursor.row -= self.views[0].line_range.start;
-                                print!("{}", self.views[0].view_cursor);
                                 stdout().flush();
                             }
+                            self.views[0].statline_update_line_number(pos.line_index+1, pos.get_line_position()+1);
                         },
                         EscapeKeyCode::Up => {
                             let pos = self.buffers[self.current_buffer].lock().unwrap().move_cursor(MoveKind::Line(MoveDir::Previous)).unwrap();
@@ -436,9 +441,10 @@ impl Editor {
                                 self.views[0].draw_view();
                             } else {
                                 self.views[0].view_cursor.row -= self.views[0].line_range.start;
-                                print!("{}", self.views[0].view_cursor);
+                                // print!("{}", self.views[0].view_cursor);
                                 stdout().flush();
                             }
+                            self.views[0].statline_update_line_number(pos.line_index+1, pos.get_line_position()+1);
                         },
                         EscapeKeyCode::Down => {
                             // self.buffers[self.current_buffer].lock().unwrap().move_cursor();
@@ -450,11 +456,12 @@ impl Editor {
                                 // self.views[0].view_cursor.row -= self.views[0].line_range.start;
                             } else {
                                 self.views[0].view_cursor.row -= self.views[0].line_range.start;
-                                print!("{}", self.views[0].view_cursor);
+                                // print!("{}", self.views[0].view_cursor);
                                 stdout().flush();
                             }
                             // self.views[0].draw_view();
                             self.views[0].restore_statline();
+                            self.views[0].statline_update_line_number(pos.line_index+1, pos.get_line_position()+1);
                         }
                     }
                     // print!("{}", _esk.output());stdout().lock().flush();

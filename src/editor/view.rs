@@ -19,6 +19,9 @@ use std::thread::sleep;
 use std::time::Duration;
 use crate::editor::editor::debug_sleep;
 use std::ops::Range;
+use crate::cmd::Command;
+
+const STATUS_TITLE: &'static str = "[status]: ";
 
 #[derive(Debug)]
 pub struct WinDim(pub u16, pub u16);
@@ -122,9 +125,11 @@ impl EventListener for View {
     }
 }
 
+#[derive(Clone)]
 pub struct ViewConfig {
     bg_color: SetColor,
     fg_color: SetColor,
+    error_color: SetColor,
     stat_line_color: (SetColor, SetColor)
 }
 
@@ -133,7 +138,8 @@ impl Default for ViewConfig {
         ViewConfig {
             bg_color: SetColor::Background(Color::Blue),
             fg_color: SetColor::Foreground(Color::White),
-            stat_line_color: (SetColor::Background(Color::BrightCyan), SetColor::Background(Color::Black))
+            error_color: SetColor::Foreground(Color::Red),
+            stat_line_color: (SetColor::Background(Color::Cyan), SetColor::Foreground(Color::Magenta))
         }
     }
 }
@@ -170,7 +176,6 @@ pub trait ViewRange {
     fn shift_forward(&mut self, len: usize);
     fn shift_backward(&mut self, len: usize);
 }
-
 impl ViewRange for std::ops::Range<usize> {
     fn shift_forward(&mut self, len: usize) {
         self.start += len;
@@ -210,6 +215,31 @@ pub struct View {
 }
 
 impl View {
+
+    pub fn new_with_cfg(vcfg: &ViewConfig) -> Option<Self> {
+        let mut v = View {
+            view_cursor: ViewCursor{ row: 1, col: 1},
+            statline_view_cursor: ViewCursor {row: 1, col: 1},
+            size: (0, 0),
+            line_range: 0..0,
+            buffer_ref: Arc::new(Mutex::new(Textbuffer::new())),
+            top_line: TextPosition::new(),
+            win_size: WinDim(0, 0),
+            status_line_position: ViewCursor { row: 0, col: 0},
+            view_cfg: vcfg.clone()
+        };
+
+        if let Some(winsize) = v.get_window_size() {
+            v.win_size = WinDim::from(winsize);
+            v.status_line_position.row = v.win_size.1 as usize;
+            v.statline_view_cursor = v.status_line_position;
+            v.line_range = 0..(v.win_size.1 as usize -1);
+            Some(v)
+        } else {
+            None
+        }
+    }
+
     pub fn new() -> Option<Self> {
         let mut v = View {
             view_cursor: ViewCursor{ row: 1, col: 1},
@@ -306,12 +336,6 @@ impl View {
         stdout().flush();
     }
 
-    pub fn statline_error_msg(&mut self, msg: &str) {
-        let error_title = "[error]: ";
-        self.statline_view_cursor.col = error_title.len() + 1;
-        print!("{}{}{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, ViewOperations::ClearLineRest, error_title, msg);
-    }
-
     pub fn on_save_file(&mut self) {
         let open_title = "[save]: ";
         self.statline_view_cursor.col = open_title.len() + 1;
@@ -319,12 +343,24 @@ impl View {
         stdout().flush();
     }
 
+    pub fn on_statline_error(&mut self, msg: &str) {
+        print!("{}{}{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.error_color, ViewOperations::ClearLineRest, msg, self.view_cursor);
+        stdout().flush();
+    }
+
+    pub fn statline_update_line_number(&mut self, line: usize, col: usize) {
+        let info = line.to_string().chars().chain(":".chars()).chain(col.to_string().chars()).collect::<String>();
+        let sl_pos = self.win_size.0 as usize - info.len()+1;
+        let mut tmp_cursor = self.status_line_position;
+        tmp_cursor.col = sl_pos as usize;
+        print!("{}{}{}{}{}", tmp_cursor, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, info, self.view_cursor);
+        stdout().flush();
+    }
+
     pub fn restore_statline(&mut self) {
-        let mut stat = " ".repeat(self.win_size.0 as usize);
         let stat_title = "[status]: ";
-        stat.replace_range(0..stat_title.len(), stat_title);
         self.statline_view_cursor.col = stat_title.len() + 1;
-        print!("{}{}{}{}\x1b[m{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, stat, self.view_cursor);
+        print!("{}{}{}{}\x1b[m{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, stat_title.chars().chain(" ".repeat(self.win_size.0 as usize- stat_title.len()).chars()).collect::<String>(), self.view_cursor);
         stdout().flush();
     }
 
@@ -377,6 +413,7 @@ impl View {
         }
     }
 
+    #[inline]
     pub fn write_character_buffered(&mut self, ch: char) {
         if ch == '\n' {
             self.view_cursor.row += 1;
@@ -384,7 +421,6 @@ impl View {
             print!("\r\n");
         } else {
             self.view_cursor.col += 1;
-            //print!("{}{}{}", self.view_cfg.bg_color, self.view_cfg.fg_color, ch);
             print!("{}", ch);
         }
     }
@@ -506,27 +542,11 @@ impl View {
             let d = guard.get_data_range(abs_begin, line_end_abs);
             let esc = 27u8;
             print!("{}[2J{}[1;1H", esc as char, esc as char);
-            let mut a = " ".repeat(self.win_size.0 as usize);
-            a.push('\n');
-            a.push('\r');
-            let res = a.repeat(self.win_size.1 as usize + 1);
-
-            let STATUS_TITLE = "[status]: ";
-            let fullstat = STATUS_TITLE.chars().chain(" ".repeat(self.win_size.0 as usize - STATUS_TITLE.len()).chars());
-
-            let mut status = " ".repeat(self.win_size.0 as usize);
-            let status_title = "[status]: ";
-            self.statline_view_cursor.col = status_title.len() + 1;
-            status.replace_range(0..status_title.len(), status_title);
-            // let t = self.view_cfg.bg_color.colorize(res.as_ref()).chars().chain("\x1b[1;1H".chars()).collect::<&str>();
+            let a = " ".repeat(self.win_size.0 as usize * self.win_size.1 as usize);
             print!("\x1b[2J\x1b[1;1H{}{}[1;1H",
-                   self.view_cfg.bg_color.colorize(res.as_ref()),
+                   self.view_cfg.bg_color.colorize(a.as_ref()),
                    esc as char);
             self.view_cursor = ViewCursor::default();
-            // clear the screen
-            // paint the screen with default colors (or color settings provided via .rc file)
-            // set up status line
-            // paint status line
             d
         };
         print!("{}{}", self.view_cfg.bg_color, self.view_cfg.fg_color);
@@ -538,13 +558,6 @@ impl View {
         // self.fix_range_old();
         // print!("{}", self.view_cursor);
         self.restore_statline();
-        // stdout().flush();
-        /* TODO: get data from buffer in the range of top_line .. (top_line + (winsize.x * winsize.y)
-            scan content, for new lines, and filter out any newlines that won't fit on screen
-            i.e, newline count > winsize.y. newline count being, find newlines between absolute
-            positions top_line.absolute to (top_line + (winsize.x * winsize.y), then any newline with
-            index higher than (top_line.line_number + winsize.y)
-        */
     }
 }
 

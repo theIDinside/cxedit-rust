@@ -13,6 +13,14 @@ use cxedit::editor::editor::Editor;
 
 fn main() {
 
+    let default_config = Path::new("config.rc");
+
+    if default_config.exists() {
+
+    } else {
+
+    }
+
     let args = args().collect::<Vec<String>>();
     let f = if args.len() == 2 {
         let p = Path::new(&args[1]);
