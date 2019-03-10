@@ -11,6 +11,7 @@ pub enum KeyCode {
     CtrlO,
     CtrlQ,
     CtrlZ,
+    CtrlW,
     Enter,
     Tab,
     Esc,
@@ -34,6 +35,7 @@ impl KeyCode {
             KeyCode::CtrlQ =>17,
             KeyCode::CtrlS =>19,
             KeyCode::CtrlV =>22,
+            KeyCode::CtrlW => 23,
             KeyCode::CtrlZ =>26,
             _ => 0
         }

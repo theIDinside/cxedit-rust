@@ -127,10 +127,10 @@ impl EventListener for View {
 
 #[derive(Clone)]
 pub struct ViewConfig {
-    bg_color: SetColor,
-    fg_color: SetColor,
-    error_color: SetColor,
-    stat_line_color: (SetColor, SetColor)
+    pub bg_color: SetColor,
+    pub fg_color: SetColor,
+    pub error_color: SetColor,
+    pub stat_line_color: (SetColor, SetColor)
 }
 
 impl Default for ViewConfig {
@@ -343,6 +343,13 @@ impl View {
         stdout().flush();
     }
 
+    pub fn on_enter_command(&mut self) {
+        let title = "[command]: ";
+        self.statline_view_cursor.col = title.len() + 1;
+        print!("{}{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.stat_line_color.1, title, ViewOperations::ClearLineRest);
+        stdout().flush();
+    }
+
     pub fn on_statline_error(&mut self, msg: &str) {
         print!("{}{}{}{}{}{}", self.status_line_position, self.view_cfg.stat_line_color.0, self.view_cfg.error_color, ViewOperations::ClearLineRest, msg, self.view_cursor);
         stdout().flush();
@@ -504,13 +511,10 @@ impl View {
             self.line_range = (begin + diff)..(end + diff);
             self.top_line = self.buffer_ref.lock().unwrap().get_line_end_pos_0_idx(self.line_range.start).unwrap();
             // TODO: Remove this when you are 1000000000% certain scrolling functionality works. This fucking bullshit took me 2 days to get right.
-            // debug_sleep(Some(format!("Moving after range.. abs_begin: {}", self.top_line.line_start_absolute)), Some(2500));
             let bottom = self.buffer_ref.lock().unwrap().get_line_end_pos(self.line_range.end).unwrap();
-            // self.view_cursor = ViewCursor::from(bottom);
             if self.view_cursor.row >= self.win_size.1 as usize - 1 {
                 let win_curs_diff = self.view_cursor.row - self.win_size.1 as usize;
-                self.view_cursor.row -= (self.line_range.start);
-                // self.view_cursor.row -= win_curs_diff;
+                self.view_cursor.row -= self.line_range.start;
             }
         } else if tp.line_index < self.line_range.start && self.view_cursor.row != 0 {
             let diff = self.line_range.start - tp.line_index;

@@ -34,6 +34,7 @@ pub enum Command {
 
 use self::Command::{Jump, Find, Save, Open};
 use crate::cmd::command_engine::Operation;
+use std::error::Error;
 
 impl From<&Command> for &str {
     fn from(cmd: &Command) -> Self {
@@ -99,13 +100,17 @@ pub enum StatlineCommandFlag {
     SameWindowClose
 }
 
-
+#[derive(Clone)]
+pub enum SeekFrom {
+    Start,
+    End,
+}
 
 #[derive(Clone)]
 pub enum StatlineCommand {
     OpenFile(Option<String>, Option<Vec<StatlineCommandFlag>>),
     SaveFile(Option<String>, Option<Vec<StatlineCommandFlag>>),
     Goto(Option<usize>),
-    Find(Option<String>),
+    Find(Option<String>, SeekFrom),
     Error(String)
 }

@@ -4,6 +4,11 @@ use std::thread::sleep;
 use std::time::Duration;
 use std::collections::HashMap;
 use crate::{Serialize as S, Deserialize as D};
+use std::error::Error;
+use crate::data::text_buffer::ObjectKind;
+use crate::editor::key::KeyCode;
+
+
 pub enum Position {
     Absolute(usize),
     Relative(usize)
@@ -19,6 +24,7 @@ pub enum Operation {
     InsertData(AbsolutePos, String),
     Delete(AbsolutePos, char),
     Remove(AbsolutePos, char),
+    Copy(ObjectKind),
     MacroRecord,
     MacroStop,
     MacroPlay(MacroName),
@@ -48,9 +54,9 @@ impl Default for Macro {
     }
 }
 
-pub enum ActionResult {
+pub enum OperationResult {
     OK,
-    ERR
+    ERR(String)
 }
 
 pub struct CommandEngine {
@@ -58,7 +64,8 @@ pub struct CommandEngine {
     forward_history: Vec<Operation>,
     buffer_ref: Arc<Mutex<Textbuffer>>,
     macros: HashMap<String, Macro>,
-    macro_recording: bool
+    pub combo_trigger: Option<KeyCode>,
+    macro_recording: bool,
 }
 
 impl CommandEngine {
@@ -68,15 +75,20 @@ impl CommandEngine {
             forward_history: vec![],
             buffer_ref: buffer.clone(),
             macros: HashMap::new(),
-            macro_recording: false
+            macro_recording: false,
+            combo_trigger: None
         }
+    }
+
+    pub fn set_last_key(&mut self, kc: KeyCode) {
+        self.combo_trigger = Some(kc)
     }
 
     pub fn register_buffer(&mut self, buf_ref: Arc<Mutex<Textbuffer>>) {
         self.buffer_ref = buf_ref.clone();
     }
 
-    pub fn execute(&mut self, action: Operation) -> ActionResult {
+    pub fn execute(&mut self, action: Operation) -> OperationResult {
 
         match &action {
             Operation::Insert(pos, ch) => {
@@ -90,7 +102,7 @@ impl CommandEngine {
                 }
                 self.history.push(action);
                 self.forward_history.clear();
-                ActionResult::OK
+                OperationResult::OK
             },
             Operation::InsertData(pos, data) => {
                 let mut guard = self.buffer_ref.lock().unwrap();
@@ -102,7 +114,7 @@ impl CommandEngine {
                     guard.insert_data(data);
                 }
                 self.history.push(action);
-                ActionResult::OK
+                OperationResult::OK
             },
             Operation::Delete(pos, _) => {
                 let mut guard = self.buffer_ref.lock().unwrap();
@@ -114,7 +126,7 @@ impl CommandEngine {
                     guard.delete();
                 }
                 self.history.push(action);
-                ActionResult::OK
+                OperationResult::OK
             },
             Operation::Remove(pos, ch) => {
                 // sleep(Duration::from_millis(1500));
@@ -124,14 +136,14 @@ impl CommandEngine {
                 if *pos == bufpos && *pos > 0 {
                     guard.remove();
                     self.history.push(action);
-                    ActionResult::OK
+                    OperationResult::OK
                 } else if *pos > 0 {
                     // guard.set_textpos(*pos);
                     guard.remove();
                     self.history.push(Operation::Remove(bufpos-1, *ch));
-                    ActionResult::OK
+                    OperationResult::OK
                 } else {
-                    ActionResult::ERR
+                    OperationResult::ERR(format!("Couldn't remove {} at {}", ch, pos))
                 }
             },
             Operation::Undo => {
@@ -148,7 +160,7 @@ impl CommandEngine {
                             }
                             self.forward_history.push(Operation::Insert(*pos, *ch));
                             self.history.pop();
-                            ActionResult::OK
+                            OperationResult::OK
                         },
                         Operation::Insert(pos, ch) => {
                             let mut guard = self.buffer_ref.lock().unwrap();
@@ -161,7 +173,7 @@ impl CommandEngine {
                             }
                             self.forward_history.push(Operation::Remove(*pos, *ch));
                             self.history.pop();
-                            ActionResult::OK
+                            OperationResult::OK
                         },
                         Operation::Remove(pos, ch) => {
                             let mut guard = self.buffer_ref.lock().unwrap();
@@ -174,7 +186,7 @@ impl CommandEngine {
                             }
                             self.forward_history.push(Operation::Insert(*pos, *ch));
                             self.history.pop();
-                            ActionResult::OK
+                            OperationResult::OK
                         },
                         Operation::InsertData(pos, data) => {
                             let mut guard = self.buffer_ref.lock().unwrap();
@@ -194,7 +206,7 @@ impl CommandEngine {
                                 }
                             }
                             self.history.pop();
-                            ActionResult::OK
+                            OperationResult::OK
                         },
                         Operation::MacroPlay(macroname) => {
                             let m = &self.macros[macroname];
@@ -203,28 +215,31 @@ impl CommandEngine {
                         _ => {
                             unimplemented!("This is not implemented yet!!!");
                             sleep(Duration::from_millis(2500));
-                            ActionResult::ERR
+                            OperationResult::ERR("Not yet implemented!".into())
                         }
                     }
                 } else {
-                    ActionResult::ERR
+                    OperationResult::ERR("History queue empty.".into())
                 }
             },
             Operation::Redo => {
                 unimplemented!("Redoing last undo command not yet implemented");
-                ActionResult::ERR
+                OperationResult::ERR(format!("Redo command not implemented yet"))
             },
             Operation::MacroPlay(name) => {
                 unimplemented!("Playing macros not yet implemented");
-                ActionResult::ERR
+                OperationResult::ERR(format!("Macro command not implemented yet"))
             }
             Operation::MacroRecord => {
                 unimplemented!("Recording macros not yet implemented");
-                ActionResult::ERR
+                OperationResult::ERR(format!("Macro command not implemented yet"))
             }
             Operation::MacroStop => {
                 unimplemented!("Recording macros not yet implemented");
-                ActionResult::ERR
+                OperationResult::ERR(format!("Macro command not implemented yet"))
+            },
+            Operation::Copy(obj) => {
+                OperationResult::ERR(format!("Macro command not implemented yet"))
             }
         }
     }

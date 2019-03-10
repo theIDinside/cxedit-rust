@@ -15,7 +15,7 @@ use crate::cfg::Config;
 use crate::editor::key::{KeyCode, EscapeKeyCode};
 use crate::cmd::command_engine::CommandEngine;
 use crate::cmd::command_engine::Operation;
-use crate::cmd::command_engine::ActionResult;
+use crate::cmd::command_engine::OperationResult;
 use crate::editor::view::WinDim;
 use std::thread::sleep;
 use std::time::Duration;
@@ -24,14 +24,17 @@ use crate::data::text_buffer::TextPosition;
 use crate::cmd::StatlineCommand;
 use crate::cmd::StatlineCommandFlag;
 use crate::cmd::StatlineCommandFlagList;
+use crate::cmd::SeekFrom;
+use crate::data::text_buffer::Cursor;
+use crate::data::text_buffer::ObjectKind;
 
 pub fn debug_sleep(msg: Option<String>, val: Option<u64>) {
     println!("\x1b[25;10H{}", msg.unwrap_or(" ".into()));
     sleep(Duration::from_millis(val.unwrap_or(1500)));
 }
 
-pub enum InputMode {
-    Insert,
+pub enum Mode {
+    Normal,
     Movement,
     Command
 }
@@ -43,7 +46,7 @@ pub struct Editor {
     current_buffer: usize,
     running: bool,
     original_terminal_settings: Option<Termios>,
-    _input_mode: InputMode,
+    _input_mode: Mode,
     config: Config,
     cmd_engine: CommandEngine
 }
@@ -73,7 +76,7 @@ impl Editor {
             current_view: 0,
             running: false,
             original_terminal_settings: None,
-            _input_mode: InputMode::Insert,
+            _input_mode: Mode::Normal,
             config: Config::default(),
             cmd_engine: CommandEngine::new(Arc::new(Mutex::new(Textbuffer::new())))
         }
@@ -131,6 +134,25 @@ impl Editor {
         }
     }
 
+    pub fn enter_statline_command(&mut self) -> Option<StatlineCommand> {
+        let title = "[command]: ";
+        self.views[0].statline_view_cursor.col = title.len() + 1;
+        print!("{}{}{}{}{}", self.views[0].status_line_position, self.views[0].view_cfg.stat_line_color.0, self.views[0].view_cfg.stat_line_color.1, title, ViewOperations::ClearLineRest);
+        stdout().flush();
+        let title_len = title.len();
+        let mut vc = self.views[0].status_line_position;
+        vc.col = title_len + 1usize;
+        let mut cmd_string_buffer_index = 0;
+
+        let a = loop {
+            if 0 == 0 {
+                break None;
+            }
+            break Some(StatlineCommand::Error("Erroneous input".into()));
+        };
+        a
+    }
+
     pub fn statline_input(&mut self, cmd: Command) -> Option<StatlineCommand> {
         let mut input = String::new();
         let stat_line_title = String::from(&cmd);
@@ -178,7 +200,7 @@ impl Editor {
                         },
                         Command::Find => {
                             if input.len() > 0 {
-                                Some(StatlineCommand::Find(Some(input)))
+                                Some(StatlineCommand::Find(Some(input), SeekFrom::Start))
                             } else {
                                 None
                             }
@@ -243,6 +265,10 @@ impl Editor {
         self.views[0].on_statline_error(msg);
     }
 
+    pub fn take_command_input(&mut self) {
+
+    }
+
     // TODO: split up run function, to remove the intense complexity and spaghettization of code
     pub fn run(&mut self) {
         // TODO: setup code, and also
@@ -250,28 +276,41 @@ impl Editor {
         let mut running = self.running;
         while running {
             let kp = self.handle_keypress();
+            /*
+            match self._input_mode {
+                Mode::Movement => {
+
+                },
+                Mode::Input => {
+                    self.take_normal_input();
+                },
+                Mode::Command => {
+                    let cmd = cmd_engine.read_command().and_then(|cmd| cmd.exec())
+                    cmd.exec();
+                },
+            }
+            */
             self.views[0].restore_statline();
             match kp {
                 KeyCode::Character(c) => {
                     let abs_pos =self.buffers[0].lock().unwrap().get_textpos();
                     let pos = abs_pos.absolute;
                     match self.cmd_engine.execute(Operation::Insert(pos, c)) {
-                        ActionResult::OK => {
+                        OperationResult::OK => {
                             self.views[self.current_view].draw_view();
                         },
-                        ActionResult::ERR => {
+                        OperationResult::ERR(errmsg) => {
 
                         }
                     }
-                    // self.buffers[0].lock().unwrap().insert_ch(c);
                 },
                 KeyCode::Enter => {
                     let pos = *&self.buffers[0].lock().unwrap().get_textpos().absolute;
                     match self.cmd_engine.execute(Operation::Insert(pos, '\n')) {
-                        ActionResult::OK => {
+                        OperationResult::OK => {
                             self.views[0].draw_view();
                         },
-                        ActionResult::ERR => {
+                        OperationResult::ERR(errmsg)=> {
 
                         }
                     }
@@ -284,26 +323,69 @@ impl Editor {
                     if pos > 0 {
                         let c = self.buffers[0].lock().unwrap().get_at(pos-1).unwrap();
                         match self.cmd_engine.execute(Operation::Remove(pos, c)) {
-                            ActionResult::OK => {
+                            OperationResult::OK => {
                             self.views[0].draw_view();
                             },
-                            ActionResult::ERR => {
+                            OperationResult::ERR(errmsg)=> {
 
                             }
                         }
                     }
                 },
+                KeyCode::CtrlW => {
+                    self.views[0].restore_statline();
+                    let completed = match &self.cmd_engine.combo_trigger {
+                        Some(kc) if *kc == KeyCode::CtrlW => {
+                            if let Some(cmd) = self.config.get_combo_bindings(kc).and_then(|map| map.get(&KeyCode::CtrlW)) {
+                                match cmd {
+                                    Command::Action(Operation::Copy(ObjectKind::Line)) => {
+                                        let r= self.buffers[0].lock().unwrap().find_range_of(Cursor::Buffer, ObjectKind::Line);
+                                        if r.is_some() {
+                                            let range = r.unwrap();
+                                            let msg: String = self.buffers[0].lock().unwrap().get_data(range.clone()).chars().filter(|c| *c != '\n').collect();
+                                            self.views[0].on_statline_error(format!("Found range: {}..{}, with contents: '{}'", &range.start, &range.end, msg).as_ref());
+                                        }
+                                    },
+                                    _ => {}
+                                }
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                        Some(_) => {
+                            true
+                        },
+                        None => {
+                            let r= self.buffers[0].lock().unwrap().find_range_of(Cursor::Buffer, ObjectKind::Word);
+                            if r.is_some() {
+                                let range = r.unwrap();
+                                let msg = self.buffers[0].lock().unwrap().get_data(range.clone());
+                                self.views[0].on_statline_error(format!("Found range: {}..{}, with contents: '{}'", &range.start, &range.end, msg).as_ref());
+                            }
+                            false
+                        }
+                    };
+                    if !completed {
+                        self.cmd_engine.combo_trigger = Some(KeyCode::CtrlW)
+                    } else {
+                        self.cmd_engine.combo_trigger = None
+                    }
+                }
                 KeyCode::Tab => {
                     let pos = *&self.buffers[0].lock().unwrap().get_textpos().absolute;
                     match self.cmd_engine.execute(Operation::InsertData(pos, "    ".into())) {
-                        ActionResult::OK => {
+                        OperationResult::OK => {
                             self.views[self.current_view].draw_view();
                         },
-                        ActionResult::ERR => {}
+                        OperationResult::ERR(errmsg)=> {}
                     }
                 },
                 KeyCode::Esc => {},
-                KeyCode::CtrlBackspace => {},
+                KeyCode::CtrlBackspace => {
+                    let current_pos = self.buffers[0].lock().unwrap().get_textpos().absolute;
+
+                },
                 KeyCode::CtrlG => {
                     self.views[self.current_view].on_goto();
                     let cmd = self.statline_input(Command::Jump);
@@ -377,10 +459,10 @@ impl Editor {
                 },
                 KeyCode::CtrlZ => {
                     match self.cmd_engine.execute(Operation::Undo) {
-                        ActionResult::OK => {
+                        OperationResult::OK => {
                             self.views[0].draw_view();
                         },
-                        ActionResult::ERR => {
+                        OperationResult::ERR(errmsg)=> {
 
                         }
                     }
@@ -540,6 +622,7 @@ impl Editor {
                 17 => KeyCode::CtrlQ,
                 19 => KeyCode::CtrlS,
                 22 => KeyCode::CtrlV,
+                23 => KeyCode::CtrlW,
                 26 => KeyCode::CtrlZ,
                 27 => {
                     self.interpret_input_sequence()

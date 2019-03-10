@@ -17,10 +17,13 @@ pub enum CfgSizeOptions {
     None
 }
 
+use std::collections::hash_set;
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Config {
     file_name: PathBuf,
     key_bindings: HashMap<KeyCode, Command>,
+    command_combo_key_bindings: HashMap<KeyCode, HashMap<KeyCode, Command>>,
     history_size: CfgSizeOptions,
     bg_color: SetColor,
     fg_color: SetColor,
@@ -62,6 +65,11 @@ impl Default for Config {
                 (KeyCode::CtrlG, Command::Jump),
                 (KeyCode::CtrlZ, Command::Action(Operation::Undo)),
             ].iter().cloned().collect();
+
+        let command_combo_key_bindings =
+            [
+                (KeyCode::CtrlW, [ (KeyCode::CtrlW, Command::Action(Operation::Copy(ObjectKind::Line))) ].iter().cloned().collect::<HashMap<KeyCode, Command>>())
+            ].iter().cloned().collect();
         let history_size = CfgSizeOptions::Infinite;
         let bg_color = SetColor::Background(Color::Blue);
         let fg_color = SetColor::Foreground(Color::White);
@@ -70,6 +78,7 @@ impl Default for Config {
         Config {
             file_name,
             key_bindings,
+            command_combo_key_bindings,
             history_size,
             bg_color,
             fg_color,
@@ -78,6 +87,9 @@ impl Default for Config {
     }
 }
 use std::fs;
+use crate::data::text_buffer::ObjectKind;
+use std::hash::Hash;
+
 impl Config {
     pub fn read_config(_file: &Path) -> Config {
         let c = Config::default();
@@ -116,5 +128,10 @@ impl Config {
     #[inline]
     pub fn get_binding(&self, kc: KeyCode) -> Option<&Command> {
         self.key_bindings.get(&kc)
+    }
+
+    #[inline]
+    pub fn get_combo_bindings(&self, kc: &KeyCode) -> Option<&HashMap<KeyCode, Command>> {
+        self.command_combo_key_bindings.get(kc)
     }
 }

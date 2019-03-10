@@ -20,6 +20,10 @@ use std::time::Duration;
 use std::thread::current;
 use crate::editor::editor::debug_sleep;
 
+use std::cmp::{min, max};
+use std::ops::Range;
+use crate::{Deserialize, Serialize};
+#[derive(Clone, Deserialize, Serialize, Debug)]
 pub enum ObjectKind {
     Word,
     Line,
@@ -115,6 +119,12 @@ pub enum Cursor {
     Buffer
 }
 
+type steps = usize;
+pub enum SeekDir {
+    Forward(steps),
+    Backward(steps)
+}
+
 impl Cursor {
     pub fn to_row_col(&self, tb: &Textbuffer) -> (usize, usize) {
         match self {
@@ -175,43 +185,72 @@ impl Textbuffer {
         self.dirty = false;
     }
 
-    pub fn find_range_of(&self, cursor: Cursor, kind: ObjectKind) -> (TextPosition, TextPosition) {
+
+    /// Ranges in rust are by default end-exclusive. So "word" is data, in the index span of a range between 0..4.
+    /// This is also convenient for keeping track of the word's length, as it is always the end-boundary (word.len() == 4)
+    pub fn find_range_of(&mut self, cursor: Cursor, kind: ObjectKind) -> Option<std::ops::Range<usize>> {
+        let start: usize = match cursor {
+            Cursor::Buffer => self.get_absolute_cursor_pos(),
+            Cursor::Absolute(pos) => pos
+        };
+
         match kind {
             ObjectKind::Word => {
-                let b = self.data.iter_begin_to_cursor(cursor).rev().position(|c| *c == ' ' || *c == '\n').and_then(|c| Some(c + 1)).unwrap_or(0usize);
-                let e = self.data.iter_cursor_to_end(cursor).position(|c| *c == ' ' || *c == '\n').and_then(|c| Some(c - 1)).unwrap_or(self.data.len()-1);
-                let mut b_tp = self.get_text_position_info(b);
-                let mut e_tp = b_tp.clone();
-                b_tp.absolute = b;
-                e_tp.absolute = e;
-                (b_tp, e_tp)
+                let found_start_pos =
+                match self.get_at(start) {
+                    Some(ch) if ch.is_whitespace() => {
+                        let p = (start..self.len()).into_iter().position(|idx| !self.data[idx].is_whitespace());
+                        if p.is_none() {
+                            return None;
+                        } else {
+                            p.unwrap() + start
+                        }
+                    },
+                    Some(ch) if !ch.is_whitespace() => {
+                        (0..start).into_iter().rposition(|idx| {
+                            self.data[idx].is_whitespace()
+                        }).and_then(|v| Some(v+1)).unwrap_or(0)
+                    },
+                    _ => return None
+                };
+                let found_end_pos = match self.get_at(found_start_pos+1) {
+                    Some(ch) if ch.is_whitespace() => {
+                        found_start_pos+1
+                    },
+                    Some(ch) if !ch.is_whitespace() => {
+                        (found_start_pos+1 .. self.len()).into_iter().position(|idx| {
+                            self.data[idx].is_whitespace()
+                        }).and_then(|v| Some(found_start_pos+1+v)).unwrap_or(self.len())
+                    },
+                    _ => return None
+                };
+                Some(found_start_pos..found_end_pos)
             },
             ObjectKind::Line => {
-                let b = self.data.iter_begin_to_cursor(cursor).rev().position(|c| *c == '\n').and_then(|c| Some(c + 1)).unwrap_or(0usize);
-                let e = self.data.iter_cursor_to_end(cursor).position(|c| *c == '\n').unwrap_or(self.data.len());
-                let mut b_tp = self.get_text_position_info(b);
-                let mut e_tp = b_tp.clone();
-                b_tp.absolute = b;
-                e_tp.absolute = e;
-                (b_tp, e_tp)
+                if let Some(c) = self.get_at(start) {
+                    if c == '\n' {
+                        let end_pos = start;
+                        let start_pos = (0..start).into_iter().rposition(|i| {
+                            let ch = self.data[i];
+                            ch == '\n'
+                        }).and_then(|v| Some(v+1)).unwrap_or(0);
+                        return Some(start_pos..end_pos+1);
+                    } else {
+                        let start_pos = (0..start).into_iter().rposition(|i| {
+                            let ch = self.data[i];
+                            ch == '\n'
+                        }).and_then(|v| Some(v+1)).unwrap_or(0);
+                        let end_pos = (start..self.len()).into_iter().position(|v| {
+                            self.data[v] == '\n'
+                        }).and_then(|v| Some(start+v)).unwrap_or(self.len()-1);
+                        return Some(start_pos..end_pos+1);
+                    }
+                } else {
+                    None
+                }
             },
             ObjectKind::Block => {
-                // N.B! This is just an example.. not all programming languages have { } blocks.
-                let mut lvl = 1;
-                let b = self.data.iter_begin_to_cursor(cursor).rev().position(|c| *c == '{').unwrap_or(0usize);
-                let e = self.data.iter_cursor_to_end(cursor).position(|c| {
-                  if *c == '{' {
-                      lvl += 1;
-                  } else if *c == '}' {
-                      lvl -= 1;
-                    }
-                return *c == '}' && lvl == 0;
-                }).unwrap_or(self.data.len());
-                let mut b_tp = self.get_text_position_info(b);
-                let mut e_tp = self.get_text_position_info(e);
-                b_tp.absolute = b;
-                e_tp.absolute = e;
-                (b_tp, e_tp)
+                return None;
             }
         }
     }
@@ -221,6 +260,10 @@ impl Textbuffer {
         let line_begin_absolute = (0..self.data.get_pos()).into_iter().rposition(|idx| self.data[idx] == '\n').and_then(|pos| Some(pos+1)).unwrap_or(0usize);
         let line_end_absolute = (self.data.get_pos()..self.data.len()).into_iter().position(|idx| self.data[idx] == '\n' || idx == len-1).and_then(|pos| Some(pos+1)).unwrap_or(self.data.len());
         self.data.read_string(line_begin_absolute..line_end_absolute)
+    }
+
+    pub fn get_data(&self, range: Range<usize>) -> String {
+        self.data.read_string(range)
     }
 
     pub fn get_data_range(&self, begin: usize, end: usize) -> String {
@@ -351,7 +394,7 @@ impl Textbuffer {
                 .into_iter()
                 .filter(|&index| index == 0 || self.data[index] == '\n')
                 .collect();
-        let line_pos = lines.get(line_number-1).and_then(|&value| Some(value+1)).unwrap_or(0usize);
+        let line_pos = lines.get(line_number-1).and_then(|&value| Some(value+1)).unwrap_or(self.len());
         Some(TextPosition::from((line_pos, line_pos, line_number-1)))
     }
 

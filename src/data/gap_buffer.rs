@@ -1,8 +1,16 @@
 use std::ops::Range;
 use std::ptr::copy as copyrange;
-use super::BufferString;
+use crate::data::BufferString;
 use std::ops::Index;
 use crate::data::text_buffer::Cursor;
+
+// TODO: implement into iterator for gap buffer
+// TODO: see above, then implement extend, so that we can do
+//      let mut s = String::new();
+//      s.extend(self), where self = GapBuffer<char>. The IntoIterator trait, automatically turns self, into an iterator
+//      Example of how its normally used:
+//      let mut s = String::from("hello ");
+//      s.extend(['w','o','r','l','d'].into_iter()); // s now -> "hello world"
 
 pub struct GapBuffer<T> {
     data: Vec<T>,
@@ -157,7 +165,7 @@ impl <T> GapBuffer<T> {
             Cursor::Buffer => self.get_pos(),
         };
         GapBufferIterator {
-            start: 0,
+            pos: 0,
             end: pos,
             buffer: self
         }
@@ -169,7 +177,7 @@ impl <T> GapBuffer<T> {
             Cursor::Buffer => self.get_pos(),
         };
         GapBufferIterator {
-            start: pos,
+            pos,
             end: self.len(),
             buffer: self
         }
@@ -177,7 +185,7 @@ impl <T> GapBuffer<T> {
 
     pub fn iter(&self) -> GapBufferIterator<T> {
         GapBufferIterator {
-            start: 0,
+            pos: 0,
             end: self.len(),
             buffer: self
         }
@@ -185,7 +193,7 @@ impl <T> GapBuffer<T> {
 }
 
 pub struct GapBufferIterator<'a, T> {
-    start: usize,
+    pos: usize,
     end: usize,
     buffer: &'a GapBuffer<T>
 }
@@ -194,13 +202,9 @@ impl<'a, T> Iterator for GapBufferIterator<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.start < self.end {
-            if let Some(c) = self.buffer.get(self.start) {
-                self.start += 1;
-                Some(c)
-            } else {
-                None
-            }
+        if self.pos < self.buffer.len() {
+            self.pos += 1;
+            self.buffer.get(self.pos - 1)
         } else {
             None
         }
@@ -211,7 +215,7 @@ impl<'a, T> Iterator for GapBufferIterator<'a, T> {
         P: FnMut(Self::Item) -> bool, {
         while let Some(ch) = self.next() {
          if predicate(ch) {
-             return Some(self.start);
+             return Some(self.pos);
          }
         }
         None
@@ -230,7 +234,7 @@ impl<'a, T> Iterator for GapBufferIterator<'a, T> {
 
 impl<'a, T> DoubleEndedIterator for GapBufferIterator<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.end >= self.start {
+        if self.end >= self.pos {
             if let Some(c) = self.buffer.get(self.end) {
                 self.end -= 1;
                 Some(c)
