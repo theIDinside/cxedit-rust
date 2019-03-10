@@ -15,6 +15,7 @@ Some basic functionality that is currently working:
 # Functionality I'm working on or what was last implemented:
 
 - [ ] Input modes a lá Vim
+- [ ] 
 - [ ] Redo
 - [x] Jump to <line>
 - [ ] Find <char range>
@@ -60,7 +61,14 @@ or
 ![Example color setup](one_color_setup.png)
 ![Another example color setup](another_color_setup.png)
 
+### Other stuff
+Emacs like input modes, like, pressing C-w C-w would do one thing, while C-w will do another. This can now be tested
+If you hover the cursor over a word or on a word boundary, and hit Ctrl+w, cxedit will copy that word. If you 
+immediately after (or at least do not press anything else other than) press ctrl w again, cxedit will copy the 
+entire line instead.
 
+Here's the resut of what the debug display result of Ctrl+w Ctrl+w means:
+![C-w](ctrlw.png) ![C-w C-w](like_emacs.png)
 
 Test
 
