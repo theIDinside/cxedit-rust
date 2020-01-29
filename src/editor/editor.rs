@@ -16,17 +16,17 @@ use crate::editor::key::{KeyCode, EscapeKeyCode};
 use crate::cmd::command_engine::CommandEngine;
 use crate::cmd::command_engine::Operation;
 use crate::cmd::command_engine::OperationResult;
-use crate::editor::view::WinDim;
 use std::thread::sleep;
 use std::time::Duration;
-use std::ops::Range;
-use crate::data::text_buffer::TextPosition;
 use crate::cmd::StatlineCommand;
-use crate::cmd::StatlineCommandFlag;
 use crate::cmd::StatlineCommandFlagList;
 use crate::cmd::SeekFrom;
 use crate::data::text_buffer::Cursor;
 use crate::data::text_buffer::ObjectKind;
+
+use crate::data::text_buffer::FileResult;
+
+type FResult = FileResult<usize>;
 
 pub fn debug_sleep(msg: Option<String>, val: Option<u64>) {
     println!("\x1b[25;10H{}", msg.unwrap_or(" ".into()));
@@ -142,7 +142,6 @@ impl Editor {
         let title_len = title.len();
         let mut vc = self.views[0].status_line_position;
         vc.col = title_len + 1usize;
-        let mut cmd_string_buffer_index = 0;
 
         let a = loop {
             if 0 == 0 {
@@ -191,11 +190,11 @@ impl Editor {
                 KeyCode::Enter => {
                     return match cmd {
                         Command::Open => {
-                            let (file, flags) = input.split_at(input.find(" ").unwrap_or(input.len()-1));
+                            let (file, flags) = (input, " ");
                             Some(StatlineCommand::OpenFile(Some(file.into()), StatlineCommandFlagList::from(flags).has_to_vec()))
                         },
                         Command::Save => {
-                            let (file, flags) = input.split_at(input.find(" ").unwrap_or(input.len()-1));
+                            let (file, flags) = (input, " ");
                             Some(StatlineCommand::SaveFile(Some(file.into()), StatlineCommandFlagList::from(flags).has_to_vec()))
                         },
                         Command::Find => {
@@ -308,7 +307,7 @@ impl Editor {
                     let pos = *&self.buffers[0].lock().unwrap().get_textpos().absolute;
                     match self.cmd_engine.execute(Operation::Insert(pos, '\n')) {
                         OperationResult::OK => {
-                            self.views[0].draw_view();
+                            self.views[self.current_view].draw_view();
                         },
                         OperationResult::ERR(errmsg)=> {
 
@@ -324,7 +323,7 @@ impl Editor {
                         let c = self.buffers[0].lock().unwrap().get_at(pos-1).unwrap();
                         match self.cmd_engine.execute(Operation::Remove(pos, c)) {
                             OperationResult::OK => {
-                            self.views[0].draw_view();
+                                self.views[self.current_view].draw_view();
                             },
                             OperationResult::ERR(errmsg)=> {
 
@@ -343,7 +342,7 @@ impl Editor {
                                         if r.is_some() {
                                             let range = r.unwrap();
                                             let msg: String = self.buffers[0].lock().unwrap().get_data(range.clone()).chars().filter(|c| *c != '\n').collect();
-                                            self.views[0].on_statline_error(format!("Found range: {}..{}, with contents: '{}'", &range.start, &range.end, msg).as_ref());
+                                            self.views[self.current_view].on_statline_error(format!("Found range: {}..{}, with contents: '{}'", &range.start, &range.end, msg).as_ref());
                                         }
                                     },
                                     _ => {}
@@ -412,14 +411,7 @@ impl Editor {
                     let cmd = self.statline_input(Command::Save);
                     if let Some(SaveFile(Some(suggested_fname), flags)) = cmd {
                         let p = Path::new(&suggested_fname);
-                        match self.buffers[0].lock().unwrap().save_to_file(p, None) {
-                            Ok(file_size) => {
-                                self.views[0].write_statline_line("[saved]: ", suggested_fname.chars().chain(" successfully! Size: ".chars()).chain(file_size.to_string().chars()).collect::<String>().as_ref());
-                            },
-                            Err(e) => {
-                                self.views[0].write_statline_line("[error]: ", &format!("{}", e))
-                            }
-                        }
+                        self.on_save(&suggested_fname, self.buffers[0].lock().unwrap().save_to_file(p, None));
                     } else {
                         self.views[0].restore_statline();
                     }
@@ -429,30 +421,7 @@ impl Editor {
                     self.views[self.current_view].on_open_file();
                     let cmd = self.statline_input(Command::Open);
                     if let Some(StatlineCommand::OpenFile(Some(fname), flags)) = cmd {
-                        match read_to_string(Path::new(&fname)) {
-                            Ok(data) => {
-                                let lines_to_print = self.get_view().win_size.1 - 1;
-                                let mut lindex = 0;
-                                self.buffers[self.current_buffer].lock().unwrap().clear_buffer_contents();
-                                self.buffers[self.current_buffer].lock().unwrap().insert_data(&data);
-                                let d_to_print = data.chars().take_while(|ch| {
-                                    if *ch == '\n' {
-                                        lindex += 1;
-                                    }
-                                    lindex < lines_to_print
-                                }).collect::<String>();
-                                self.views[self.current_view].init();
-                                d_to_print.chars().for_each(|c| {
-                                    self.views[self.current_view].write_character(c);
-                                });
-                                self.buffers[self.current_buffer].lock().unwrap().set_textpos(0);
-                                self.views[self.current_view].view_cursor = ViewCursor::default();
-                                self.views[0].write_statline_line("[open]: ", &format!("successfully opened {}", fname))
-                            },
-                            Err(_e) => {
-
-                            }
-                        }
+                        self.on_open(&fname);
                     } else if let None = cmd {
                         self.views[0].restore_statline();
                     }
@@ -595,6 +564,44 @@ impl Editor {
             kc
         };
         res
+    }
+
+    fn on_save(&self, file_name: &str, result: FResult) {
+        match result {
+            Ok(file_size) => {
+                self.views[0].write_statline_line("[saved]: ", file_name.chars().chain(" successfully! Size: ".chars()).chain(file_size.to_string().chars()).collect::<String>().as_ref());
+            },
+            Err(e) => {
+                self.views[0].write_statline_line("[error]: ", &format!("{}", e))
+            }
+        }        
+    }
+
+    fn on_open(&mut self, file_name: &str) {
+        match read_to_string(Path::new(&file_name)) {
+            Ok(data) => {
+                let lines_to_print = self.get_view().win_size.1 - 1;
+                let mut lindex = 0;
+                self.buffers[self.current_buffer].lock().unwrap().clear_buffer_contents();
+                self.buffers[self.current_buffer].lock().unwrap().insert_data(&data);
+                let d_to_print = data.chars().take_while(|ch| {
+                    if *ch == '\n' {
+                        lindex += 1;
+                    }
+                    lindex < lines_to_print
+                }).collect::<String>();
+                self.views[self.current_view].init();
+                d_to_print.chars().for_each(|c| {
+                    self.views[self.current_view].write_character(c);
+                });
+                self.buffers[self.current_buffer].lock().unwrap().set_textpos(0);
+                self.views[self.current_view].view_cursor = ViewCursor::default();
+                self.views[0].write_statline_line("[open]: ", &format!("successfully opened {}", file_name))
+            },
+            Err(_e) => {
+
+            }
+        }        
     }
 
     /// This function will not be able to handle any character keys other than English to begin with.

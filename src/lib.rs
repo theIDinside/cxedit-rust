@@ -1,4 +1,4 @@
-#[macro_use]
+// #[macro_use]
 extern crate serde_json;
 extern crate serde;
 

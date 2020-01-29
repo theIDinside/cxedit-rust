@@ -1,5 +1,4 @@
 pub mod command_engine;
-type OffsetAbsolute = usize;
 use crate::{Deserialize as Des, Serialize as Ser};
 
 pub trait ToOption where Self: Clone {
@@ -34,7 +33,6 @@ pub enum Command {
 
 use self::Command::{Jump, Find, Save, Open};
 use crate::cmd::command_engine::Operation;
-use std::error::Error;
 
 impl From<&Command> for &str {
     fn from(cmd: &Command) -> Self {
@@ -91,7 +89,7 @@ impl From<&str> for StatlineCommandFlagList {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum StatlineCommandFlag {
     Force,
     Deny,
@@ -100,13 +98,13 @@ pub enum StatlineCommandFlag {
     SameWindowClose
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum SeekFrom {
     Start,
     End,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum StatlineCommand {
     OpenFile(Option<String>, Option<Vec<StatlineCommandFlag>>),
     SaveFile(Option<String>, Option<Vec<StatlineCommandFlag>>),

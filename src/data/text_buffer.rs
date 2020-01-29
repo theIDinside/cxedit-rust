@@ -11,16 +11,11 @@ use crate::comms::observer::EventData;
 use std::path::Path;
 use std::fs::File;
 use std::io::Write;
-use crate::data::FileResult;
+pub use crate::data::FileResult;
 use crate::data::SaveFileError;
 use crate::editor::FileOpt;
 use std::error::Error;
-use std::thread::sleep;
-use std::time::Duration;
-use std::thread::current;
-use crate::editor::editor::debug_sleep;
 
-use std::cmp::{min, max};
 use std::ops::Range;
 use crate::{Deserialize, Serialize};
 #[derive(Clone, Deserialize, Serialize, Debug)]
@@ -119,10 +114,9 @@ pub enum Cursor {
     Buffer
 }
 
-type steps = usize;
 pub enum SeekDir {
-    Forward(steps),
-    Backward(steps)
+    Forward(usize),
+    Backward(usize)
 }
 
 impl Cursor {
@@ -306,17 +300,12 @@ impl Textbuffer {
             return Some(TextPosition::default());
         }
         let mut line_counter = 0;
-        let vec = (0..self.len()).into_iter().filter(|uidx|{
-            self.data[*uidx] == '\n'
-        }).collect::<Vec<usize>>();
-        let line_end_pos = vec.get(line);
         let nlcp = (0..self.data.len()).into_iter().take_while(|index| {
             if self.data[*index] == '\n' {
                 line_counter += 1;
             }
             line_counter <= line+1
         }).collect::<Vec<usize>>().into_iter().filter(|i| self.data[*i] == '\n').collect::<Vec<usize>>();
-        line_counter = 0;
         let line_end = *nlcp.last().unwrap_or(&buf_len);
         let line_begin =
             (0..line_end).into_iter()
@@ -330,7 +319,6 @@ impl Textbuffer {
         if buf_len == 0 {
             return Some(TextPosition::default());
         }
-        let mut line_counter = 0;
         let vec = (0..self.len()).into_iter().filter(|uidx|{
             self.data[*uidx] == '\n'
         }).collect::<Vec<usize>>();
@@ -610,7 +598,6 @@ impl Textbuffer {
 
     pub fn from_file(f_name: String) -> Textbuffer {
         use std::fs::read_to_string as read_content;
-        use std::path::Path;
         let p = Path::new(&f_name);
         let contents = read_content(p).unwrap();
         let mut tb = Textbuffer {
@@ -626,7 +613,6 @@ impl Textbuffer {
     }
 
     pub fn dump_to_string(&self) -> String {
-        use crate::data::BufferString;
         self.data.read_string(0..self.data.len()+1)
     }
 

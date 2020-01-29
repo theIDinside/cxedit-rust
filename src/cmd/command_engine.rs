@@ -4,7 +4,6 @@ use std::thread::sleep;
 use std::time::Duration;
 use std::collections::HashMap;
 use crate::{Serialize as S, Deserialize as D};
-use std::error::Error;
 use crate::data::text_buffer::ObjectKind;
 use crate::editor::key::KeyCode;
 
@@ -65,7 +64,7 @@ pub struct CommandEngine {
     buffer_ref: Arc<Mutex<Textbuffer>>,
     macros: HashMap<String, Macro>,
     pub combo_trigger: Option<KeyCode>,
-    macro_recording: bool,
+    _macro_recording: bool,
 }
 
 impl CommandEngine {
@@ -75,7 +74,7 @@ impl CommandEngine {
             forward_history: vec![],
             buffer_ref: buffer.clone(),
             macros: HashMap::new(),
-            macro_recording: false,
+            _macro_recording: false,
             combo_trigger: None
         }
     }
@@ -139,7 +138,11 @@ impl CommandEngine {
                     OperationResult::OK
                 } else if *pos > 0 {
                     // guard.set_textpos(*pos);
-                    guard.remove();
+                    if let Some(c) = guard.remove() {
+                        if c != *ch {
+                            println!("ERROR C != CH");
+                        }
+                    };
                     self.history.push(Operation::Remove(bufpos-1, *ch));
                     OperationResult::OK
                 } else {
@@ -177,13 +180,8 @@ impl CommandEngine {
                         },
                         Operation::Remove(pos, ch) => {
                             let mut guard = self.buffer_ref.lock().unwrap();
-                            let bufpos = guard.get_textpos().absolute;
-                            if *pos == bufpos {
-                                guard.insert_ch(*ch);
-                            } else {
-                                guard.set_textpos(*pos);
-                                guard.insert_ch(*ch);
-                            }
+                            guard.set_textpos(*pos-1);
+                            guard.insert_ch(*ch);
                             self.forward_history.push(Operation::Insert(*pos, *ch));
                             self.history.pop();
                             OperationResult::OK
